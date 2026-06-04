@@ -2,19 +2,38 @@ package runtime
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
 // State is the deterministic source of truth for a single runtime execution.
 type State struct {
-	RunID     RunID
-	Status    RunStatus
+	RunID  RunID
+	Status RunStatus
+
 	Steps     []Step
-	Decision  *RouteDecision
-	Failure   *Failure
+	StepCount int
+
+	ToolCalls   int
+	ToolResults int
+	ToolErrors  int
+
+	EvidenceCount int
+
+	LastToolName      toolNameString
+	LastToolError     string
+	LastToolErrorKind ToolErrorKind
+
+	FinalText string
+
+	Decision *RouteDecision
+	Failure  *Failure
+
 	StartedAt time.Time
 	UpdatedAt time.Time
 }
+
+type toolNameString string
 
 // Validation prevents inconsistent runtime state from driving orchestration.
 func (s State) Validate() error {
@@ -24,6 +43,14 @@ func (s State) Validate() error {
 
 	if err := s.Status.Validate(); err != nil {
 		return err
+	}
+
+	if s.StepCount < 0 {
+		return fmt.Errorf("run %q step count cannot be negative", string(s.RunID))
+	}
+
+	if s.ToolCalls < 0 || s.ToolResults < 0 || s.ToolErrors < 0 || s.EvidenceCount < 0 {
+		return fmt.Errorf("run %q counters cannot be negative", string(s.RunID))
 	}
 
 	for index, step := range s.Steps {
@@ -52,6 +79,16 @@ func (s State) Validate() error {
 		if err := s.Decision.Validate(); err != nil {
 			return fmt.Errorf("route decision: %w", err)
 		}
+	}
+
+	if s.LastToolErrorKind != ToolErrorNone {
+		if err := s.LastToolErrorKind.Validate(); err != nil {
+			return err
+		}
+	}
+
+	if s.LastToolErrorKind != ToolErrorNone && strings.TrimSpace(s.LastToolError) == "" {
+		return fmt.Errorf("run %q last tool error kind requires last tool error", string(s.RunID))
 	}
 
 	if !s.StartedAt.IsZero() && !s.UpdatedAt.IsZero() && s.UpdatedAt.Before(s.StartedAt) {
