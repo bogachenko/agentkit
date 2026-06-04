@@ -123,10 +123,8 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 			}
 
 			if step.Kind == StepKindToolResult && !step.ToolResult.OK {
-				failure := toolFailureFromResult(step.ToolName, step.ToolResult)
-				step.Failure = &failure
+				return o.failedResult(ctx, command, ledger, state, toolFailureFromResult(step.ToolName, step.ToolResult))
 			}
-
 			if step.Kind == StepKindAssistantText && step.Final {
 				state.Status = RunStatusCompleted
 				state.UpdatedAt = o.Clock.Now()
