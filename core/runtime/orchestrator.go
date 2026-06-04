@@ -140,7 +140,9 @@ func (o Orchestrator) publishDecision(ctx context.Context, sessionID session.ID,
 	if result.Decision.ToolName != "" {
 		payload["tool_name"] = string(result.Decision.ToolName)
 	}
-
+	if len(result.Decision.ToolArgs) > 0 {
+		payload["tool_args"] = result.Decision.ToolArgs
+	}
 	if result.Decision.Failure != nil {
 		payload["failure_code"] = string(result.Decision.Failure.Code)
 		payload["failure_message"] = result.Decision.Failure.Message

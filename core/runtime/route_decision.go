@@ -11,6 +11,7 @@ import (
 type RouteDecision struct {
 	Kind     RouteKind
 	ToolName tool.Name
+	ToolArgs map[string]any
 	Reason   string
 	Failure  *Failure
 }
@@ -48,9 +49,16 @@ func (d RouteDecision) Validate() error {
 			return fmt.Errorf("blocked route decision cannot include tool name")
 		}
 
+		if len(d.ToolArgs) > 0 {
+			return fmt.Errorf("blocked route decision cannot include tool args")
+		}
 	default:
 		if strings.TrimSpace(string(d.ToolName)) != "" {
 			return fmt.Errorf("%s route decision cannot include tool name", d.Kind)
+		}
+
+		if len(d.ToolArgs) > 0 {
+			return fmt.Errorf("%s route decision cannot include tool args", d.Kind)
 		}
 
 		if d.Failure != nil {
