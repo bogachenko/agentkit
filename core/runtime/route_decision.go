@@ -26,13 +26,13 @@ func (d RouteDecision) Validate() error {
 	}
 
 	switch d.Kind {
-	case RouteKindCallTool:
+	case RouteKindCallTool, RouteKindRequireApproval:
 		if err := d.ToolName.Validate(); err != nil {
 			return fmt.Errorf("route decision tool name: %w", err)
 		}
 
 		if d.Failure != nil {
-			return fmt.Errorf("call_tool route decision cannot include failure")
+			return fmt.Errorf("%s route decision cannot include failure", d.Kind)
 		}
 
 	case RouteKindBlocked:
@@ -42,6 +42,10 @@ func (d RouteDecision) Validate() error {
 
 		if err := d.Failure.Validate(); err != nil {
 			return fmt.Errorf("blocked route decision failure: %w", err)
+		}
+
+		if strings.TrimSpace(string(d.ToolName)) != "" {
+			return fmt.Errorf("blocked route decision cannot include tool name")
 		}
 
 	default:
