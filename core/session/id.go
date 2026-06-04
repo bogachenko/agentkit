@@ -28,3 +28,8 @@ func (id EventID) Validate() error {
 
 	return nil
 }
+
+// String allows infrastructure ports to serialize session identity without knowing session internals.
+func (id ID) String() string {
+	return string(id)
+}
