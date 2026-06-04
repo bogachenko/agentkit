@@ -41,6 +41,7 @@ type StepOrchestrator struct {
 	Publisher    port.Publisher
 	Clock        port.Clock
 	IDGenerator  port.IDGenerator
+	Tracer       port.Tracer
 }
 
 // Run consumes provider steps until final response, max steps, source completion, or failure.
@@ -52,6 +53,13 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 	if err := command.Validate(); err != nil {
 		return RunResult{}, err
 	}
+
+	ctx, runSpan := o.startTrace(ctx, "agentkit.step_run", runTraceAttrs(command))
+	defer func() {
+		if runSpan != nil {
+			runSpan.End()
+		}
+	}()
 
 	ledger, err := NewLedger(command.RunID)
 	if err != nil {
@@ -71,6 +79,10 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 		return RunResult{}, err
 	}
 
+	o.traceEvent(runSpan, "agentkit.run.started", map[string]any{
+		"agentkit.run.status": string(RunStatusRunning),
+	})
+
 	updater := StateUpdater{
 		Clock:       o.Clock,
 		IDGenerator: o.IDGenerator,
@@ -86,7 +98,7 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 			return o.failedResult(ctx, command, ledger, state, Failure{
 				Code:    FailureCodeInternalError,
 				Message: err.Error(),
-			})
+			}, runSpan)
 		}
 
 		if len(rawSteps) == 0 {
@@ -98,7 +110,7 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 				return o.failedResult(ctx, command, ledger, state, Failure{
 					Code:    FailureCodeInvalidState,
 					Message: "run reached max steps without terminal response",
-				})
+				}, runSpan)
 			}
 
 			step, err := updater.Apply(&state, rawStep)
@@ -106,7 +118,7 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 				return o.failedResult(ctx, command, ledger, state, Failure{
 					Code:    FailureCodeInvalidState,
 					Message: err.Error(),
-				})
+				}, runSpan)
 			}
 
 			if err := ledger.Append(NewStepEntry(
@@ -122,8 +134,10 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 				return RunResult{}, err
 			}
 
+			o.traceStep(ctx, step)
+
 			if step.Kind == StepKindToolResult && !step.ToolResult.OK {
-				return o.failedResult(ctx, command, ledger, state, toolFailureFromResult(step.ToolName, step.ToolResult))
+				return o.failedResult(ctx, command, ledger, state, toolFailureFromResult(step.ToolName, step.ToolResult), runSpan)
 			}
 			if step.Kind == StepKindAssistantText && step.Final {
 				state.Status = RunStatusCompleted
@@ -141,6 +155,13 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 					return RunResult{}, err
 				}
 
+				o.traceEvent(runSpan, "agentkit.ledger.summary", ledgerSummaryTraceAttrs(result.LedgerSummary))
+				o.traceEvent(runSpan, "agentkit.run.completed", map[string]any{
+					"agentkit.run.status":           string(RunStatusCompleted),
+					"agentkit.steps_completed":      result.StepsCompleted,
+					"agentkit.ledger.total_entries": result.LedgerSummary.TotalEntries,
+				})
+
 				if err := o.publish(ctx, port.EventTypeCompleted, command, map[string]any{
 					"status": string(RunStatusCompleted),
 				}); err != nil {
@@ -155,7 +176,7 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 	return o.failedResult(ctx, command, ledger, state, Failure{
 		Code:    FailureCodeInvalidState,
 		Message: "run finished without final response",
-	})
+	}, runSpan)
 }
 
 func (o StepOrchestrator) validateDependencies() error {
@@ -184,6 +205,7 @@ func (o StepOrchestrator) failedResult(
 	ledger *Ledger,
 	state State,
 	failure Failure,
+	runSpan port.Span,
 ) (RunResult, error) {
 	state.Status = RunStatusFailed
 	state.Failure = &failure
@@ -192,6 +214,10 @@ func (o StepOrchestrator) failedResult(
 	if err := state.Validate(); err != nil {
 		return RunResult{}, err
 	}
+
+	o.traceError(runSpan, failure)
+	o.traceEvent(runSpan, "agentkit.ledger.summary", ledgerSummaryTraceAttrs(ledger.Summary()))
+	o.traceEvent(runSpan, "agentkit.run.failed", failureTraceAttrs(failure))
 
 	if err := o.publish(ctx, port.EventTypeFailed, command, map[string]any{
 		"status":       string(RunStatusFailed),
@@ -224,6 +250,146 @@ func (o StepOrchestrator) publish(ctx context.Context, eventType port.EventType,
 		Payload:   payload,
 		CreatedAt: o.Clock.Now(),
 	})
+}
+
+func (o StepOrchestrator) startTrace(ctx context.Context, name string, attrs map[string]any) (context.Context, port.Span) {
+	if o.Tracer == nil {
+		return ctx, nil
+	}
+
+	return o.Tracer.Start(ctx, name, attrs)
+}
+
+func (o StepOrchestrator) traceEvent(span port.Span, name string, attrs map[string]any) {
+	if span == nil {
+		return
+	}
+
+	span.AddEvent(name, attrs)
+}
+
+func (o StepOrchestrator) traceError(span port.Span, failure Failure) {
+	if span == nil {
+		return
+	}
+
+	span.RecordError(fmt.Errorf("%s: %s", string(failure.Code), failure.Message))
+}
+
+func (o StepOrchestrator) traceStep(ctx context.Context, step Step) {
+	_, span := o.startTrace(ctx, traceStepName(step), stepTraceAttrs(step))
+	if span == nil {
+		return
+	}
+	defer span.End()
+
+	if step.Failure != nil {
+		o.traceError(span, *step.Failure)
+	}
+
+	if step.Kind == StepKindToolResult && !step.ToolResult.OK {
+		span.RecordError(fmt.Errorf("%s: %s", string(step.ToolResult.ErrorKind), step.ToolResult.ErrorMessage))
+	}
+}
+
+func traceStepName(step Step) string {
+	switch step.Kind {
+	case StepKindToolCall:
+		return "agentkit.step.tool_call"
+
+	case StepKindToolResult:
+		return "agentkit.step.tool_result"
+
+	case StepKindAssistantText:
+		if step.Final {
+			return "agentkit.step.final_response"
+		}
+
+		return "agentkit.step.assistant_text"
+
+	default:
+		return "agentkit.step"
+	}
+}
+
+func runTraceAttrs(command StepRunCommand) map[string]any {
+	return map[string]any{
+		"agentkit.run_id":     string(command.RunID),
+		"agentkit.session_id": string(command.SessionID),
+		"agentkit.max_steps":  command.MaxSteps,
+	}
+}
+
+func stepTraceAttrs(step Step) map[string]any {
+	attrs := map[string]any{
+		"agentkit.step_id":          string(step.ID),
+		"agentkit.step.kind":        string(step.Kind),
+		"agentkit.step.source":      string(step.Source),
+		"agentkit.step.status":      string(step.Status),
+		"agentkit.step.description": step.Description,
+		"agentkit.step.final":       step.Final,
+	}
+
+	if strings.TrimSpace(step.ToolCallID) != "" {
+		attrs["agentkit.tool_call_id"] = step.ToolCallID
+	}
+
+	if strings.TrimSpace(string(step.ToolName)) != "" {
+		attrs["agentkit.tool.name"] = string(step.ToolName)
+	}
+
+	if step.ToolArgs != nil {
+		attrs["agentkit.tool.args_count"] = len(step.ToolArgs)
+	}
+
+	if step.Kind == StepKindToolResult {
+		attrs["agentkit.tool_result.ok"] = step.ToolResult.OK
+		attrs["agentkit.tool_result.has_evidence"] = step.ToolResult.HasEvidence
+
+		if !step.ToolResult.OK {
+			attrs["agentkit.tool_result.error_kind"] = string(step.ToolResult.ErrorKind)
+			attrs["agentkit.tool_result.error_message"] = step.ToolResult.ErrorMessage
+		}
+	}
+
+	if step.Kind == StepKindAssistantText {
+		attrs["agentkit.assistant_text.len"] = len([]rune(step.Text))
+	}
+
+	if step.Failure != nil {
+		attrs["agentkit.failure.code"] = string(step.Failure.Code)
+		attrs["agentkit.failure.message"] = step.Failure.Message
+	}
+
+	return attrs
+}
+
+func failureTraceAttrs(failure Failure) map[string]any {
+	return map[string]any{
+		"agentkit.run.status":      string(RunStatusFailed),
+		"agentkit.failure.code":    string(failure.Code),
+		"agentkit.failure.message": failure.Message,
+	}
+}
+
+func ledgerSummaryTraceAttrs(summary LedgerSummary) map[string]any {
+	return map[string]any{
+		"agentkit.run_id":                 string(summary.RunID),
+		"agentkit.ledger.total_entries":   summary.TotalEntries,
+		"agentkit.ledger.steps":           summary.Steps,
+		"agentkit.ledger.steps_completed": summary.StepsCompleted,
+		"agentkit.ledger.steps_failed":    summary.StepsFailed,
+		"agentkit.ledger.steps_blocked":   summary.StepsBlocked,
+		"agentkit.ledger.route_decisions": summary.RouteDecisions,
+		"agentkit.ledger.tool_calls":      summary.ToolCalls,
+		"agentkit.ledger.tool_results":    summary.ToolResults,
+		"agentkit.ledger.tool_errors":     summary.ToolErrors,
+		"agentkit.ledger.assistant_texts": summary.AssistantTexts,
+		"agentkit.ledger.final_responses": summary.FinalResponses,
+		"agentkit.ledger.notes":           summary.Notes,
+		"agentkit.ledger.last_entry_id":   string(summary.LastEntryID),
+		"agentkit.ledger.last_entry_kind": string(summary.LastEntryKind),
+	}
 }
 
 func finalMessageFromText(text string) *llm.Message {
