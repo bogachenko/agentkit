@@ -46,7 +46,7 @@ func (r DecisionResult) Validate() error {
 }
 
 // HandleDecision validates one explicit route decision and records the accepted or blocked outcome.
-func (o Orchestrator) HandleDecision(ctx context.Context, command Command) (DecisionResult, error) {
+func (o Orchestrator) HandleDecision(ctx context.Context, command DecisionCommand) (DecisionResult, error) {
 	if err := o.validateDependencies(); err != nil {
 		return DecisionResult{}, err
 	}

@@ -62,14 +62,13 @@ func newTestOrchestrator(t *testing.T, contracts []tool.Contract) (Orchestrator,
 	}, ledger, publisher
 }
 
-func testOrchestrationCommand(decision RouteDecision) Command {
-	return Command{
+func testOrchestrationCommand(decision RouteDecision) DecisionCommand {
+	return DecisionCommand{
 		SessionID: session.ID("session-1"),
 		State:     runtimeTestState(),
 		Decision:  decision,
 	}
 }
-
 func TestOrchestratorHandleDecisionAcceptsValidReadOnlyToolDecision(t *testing.T) {
 	orchestrator, ledger, publisher := newTestOrchestrator(t, []tool.Contract{
 		runtimeTestToolContract(tool.Name("read_products"), true, false),

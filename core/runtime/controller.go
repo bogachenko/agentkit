@@ -8,6 +8,6 @@ type Controller struct {
 }
 
 // HandleDecision keeps transport handlers thin and delegates deterministic runtime work to Orchestrator.
-func (c Controller) HandleDecision(ctx context.Context, command Command) (DecisionResult, error) {
+func (c Controller) HandleDecision(ctx context.Context, command DecisionCommand) (DecisionResult, error) {
 	return c.Orchestrator.HandleDecision(ctx, command)
 }
