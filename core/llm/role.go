@@ -6,7 +6,6 @@ import "fmt"
 type Role string
 
 const (
-	RoleSystem    Role = "system"
 	RoleUser      Role = "user"
 	RoleAssistant Role = "assistant"
 	RoleTool      Role = "tool"
@@ -14,7 +13,7 @@ const (
 
 func (r Role) Validate() error {
 	switch r {
-	case RoleSystem, RoleUser, RoleAssistant, RoleTool:
+	case RoleUser, RoleAssistant, RoleTool:
 		return nil
 	default:
 		return fmt.Errorf("unknown llm role %q", string(r))
