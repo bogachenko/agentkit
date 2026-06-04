@@ -103,7 +103,6 @@ func assistantTextDescription(final bool) string {
 
 	return "assistant produced text"
 }
-
 func toolResultFromFunctionResponse(raw any) coreruntime.ToolExecutionResult {
 	if raw == nil {
 		return coreruntime.ToolExecutionResult{
@@ -122,14 +121,24 @@ func toolResultFromFunctionResponse(raw any) coreruntime.ToolExecutionResult {
 		}
 	}
 
-	if errText := extractToolErrorMessage(m); errText != "" {
-		return coreruntime.ToolExecutionResult{
-			OK:           false,
-			HasEvidence:  false,
-			ErrorKind:    classifyToolError(m),
-			ErrorMessage: errText,
-			Raw:          raw,
-		}
+	if explicitOK, exists, err := explicitBool(m, "ok"); err != nil {
+		return failedToolResult(coreruntime.ToolErrorValidation, err.Error(), raw)
+	} else if exists && !explicitOK {
+		return failedToolResult(explicitToolErrorKind(m), explicitToolErrorMessage(m), raw)
+	}
+
+	if explicitSuccess, exists, err := explicitBool(m, "success"); err != nil {
+		return failedToolResult(coreruntime.ToolErrorValidation, err.Error(), raw)
+	} else if exists && !explicitSuccess {
+		return failedToolResult(explicitToolErrorKind(m), explicitToolErrorMessage(m), raw)
+	}
+
+	if kind := explicitToolErrorKind(m); kind != coreruntime.ToolErrorNone {
+		return failedToolResult(kind, explicitToolErrorMessage(m), raw)
+	}
+
+	if message := explicitStructuredErrorMessage(m); message != "" {
+		return failedToolResult(coreruntime.ToolErrorFatal, message, raw)
 	}
 
 	return coreruntime.ToolExecutionResult{
@@ -139,67 +148,40 @@ func toolResultFromFunctionResponse(raw any) coreruntime.ToolExecutionResult {
 	}
 }
 
-func extractToolErrorMessage(m map[string]any) string {
-	for _, key := range []string{
-		"error_details",
-		"error",
-		"error_message",
-		"message",
-	} {
-		value, exists := m[key]
-		if !exists || value == nil {
-			continue
-		}
-
-		text := strings.TrimSpace(fmt.Sprintf("%v", value))
-		if text != "" {
-			return text
-		}
+func explicitBool(m map[string]any, key string) (bool, bool, error) {
+	value, exists := m[key]
+	if !exists {
+		return false, false, nil
 	}
 
-	return ""
+	typed, ok := value.(bool)
+	if !ok {
+		return false, true, fmt.Errorf("tool response field %q must be boolean", key)
+	}
+
+	return typed, true, nil
 }
 
-func classifyToolError(m map[string]any) coreruntime.ToolErrorKind {
-	if kind := structuredErrorKind(m); kind != coreruntime.ToolErrorNone {
-		return kind
+func failedToolResult(kind coreruntime.ToolErrorKind, message string, raw any) coreruntime.ToolExecutionResult {
+	if kind == coreruntime.ToolErrorNone {
+		kind = coreruntime.ToolErrorFatal
 	}
 
-	errorText := strings.ToLower(extractToolErrorMessage(m))
-
-	if strings.Contains(errorText, "client tool call timed out") ||
-		strings.Contains(errorText, "no sse subscriber") ||
-		strings.Contains(errorText, "client tool call is not waiting") {
-		return coreruntime.ToolErrorClientHold
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "tool returned explicit failure"
 	}
 
-	if strings.Contains(errorText, "auth") ||
-		strings.Contains(errorText, "authorization") ||
-		strings.Contains(errorText, "api-key") ||
-		strings.Contains(errorText, "client-id") ||
-		strings.Contains(errorText, "token") ||
-		strings.Contains(errorText, "credentials") {
-		return coreruntime.ToolErrorAuth
+	return coreruntime.ToolExecutionResult{
+		OK:           false,
+		HasEvidence:  false,
+		ErrorKind:    kind,
+		ErrorMessage: message,
+		Raw:          raw,
 	}
-
-	if strings.Contains(errorText, "validation") ||
-		strings.Contains(errorText, "missing properties") ||
-		strings.Contains(errorText, "request validation failed") {
-		return coreruntime.ToolErrorValidation
-	}
-
-	if _, exists := m["error_details"]; exists {
-		return coreruntime.ToolErrorValidation
-	}
-
-	if _, exists := m["reflection_guidance"]; exists {
-		return coreruntime.ToolErrorValidation
-	}
-
-	return coreruntime.ToolErrorFatal
 }
 
-func structuredErrorKind(m map[string]any) coreruntime.ToolErrorKind {
+func explicitToolErrorKind(m map[string]any) coreruntime.ToolErrorKind {
 	value, exists := m["error_kind"]
 	if !exists || value == nil {
 		return coreruntime.ToolErrorNone
@@ -215,6 +197,42 @@ func structuredErrorKind(m map[string]any) coreruntime.ToolErrorKind {
 	case string(coreruntime.ToolErrorFatal):
 		return coreruntime.ToolErrorFatal
 	default:
-		return coreruntime.ToolErrorNone
+		return coreruntime.ToolErrorFatal
 	}
+}
+
+func explicitToolErrorMessage(m map[string]any) string {
+	for _, key := range []string{
+		"error_message",
+		"error",
+		"error_details",
+	} {
+		value, exists := m[key]
+		if !exists || value == nil {
+			continue
+		}
+
+		text := strings.TrimSpace(fmt.Sprintf("%v", value))
+		if text != "" {
+			return text
+		}
+	}
+
+	return ""
+}
+
+func explicitStructuredErrorMessage(m map[string]any) string {
+	if _, exists := m["error"]; exists {
+		return explicitToolErrorMessage(m)
+	}
+
+	if _, exists := m["error_message"]; exists {
+		return explicitToolErrorMessage(m)
+	}
+
+	if _, exists := m["error_details"]; exists {
+		return explicitToolErrorMessage(m)
+	}
+
+	return ""
 }
