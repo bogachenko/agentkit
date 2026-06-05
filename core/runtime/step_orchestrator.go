@@ -54,6 +54,9 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 		return RunResult{}, err
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	ctx, runSpan := o.startTrace(ctx, "agentkit.step_run", runTraceAttrs(command))
 	defer func() {
 		if runSpan != nil {
@@ -88,7 +91,9 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 		IDGenerator: o.IDGenerator,
 	}
 
-	for state.StepCount < command.MaxSteps {
+	toolCallsUsed := 0
+
+	for {
 		rawSteps, err := o.StepProvider.NextSteps(ctx, state)
 		if err != nil {
 			if errors.Is(err, ErrStepSourceDone) {
@@ -106,10 +111,10 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 		}
 
 		for _, rawStep := range rawSteps {
-			if state.StepCount >= command.MaxSteps {
+			if rawStep.Kind == StepKindToolCall && toolCallsUsed >= command.MaxSteps {
 				return o.failedResult(ctx, command, ledger, state, Failure{
 					Code:    FailureCodeInvalidState,
-					Message: "run reached max steps without terminal response",
+					Message: "run reached max tool calls without terminal response",
 				}, runSpan)
 			}
 
@@ -119,6 +124,9 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 					Code:    FailureCodeInvalidState,
 					Message: err.Error(),
 				}, runSpan)
+			}
+			if step.Kind == StepKindToolCall {
+				toolCallsUsed++
 			}
 
 			if err := ledger.Append(NewStepEntry(

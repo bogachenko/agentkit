@@ -15,6 +15,7 @@ import (
 type stepBatch struct {
 	steps []coreruntime.Step
 	err   error
+	ack   chan struct{}
 }
 
 // ADKStepSource converts ADK runner events into neutral AgentKit runtime steps.
@@ -26,8 +27,9 @@ type ADKStepSource struct {
 	RunConfig  agent.RunConfig
 	RunOptions []runner.RunOption
 
-	once sync.Once
-	ch   chan stepBatch
+	once       sync.Once
+	ch         chan stepBatch
+	pendingAck chan struct{}
 }
 
 // NewADKStepSource validates ADK execution inputs before runtime starts consuming steps.
@@ -72,9 +74,11 @@ func (s *ADKStepSource) NextSteps(ctx context.Context, state coreruntime.State) 
 	}
 
 	s.once.Do(func() {
-		s.ch = make(chan stepBatch, 64)
+		s.ch = make(chan stepBatch)
 		go s.run(ctx)
 	})
+
+	s.ackPendingBatch()
 
 	for {
 		select {
@@ -94,6 +98,7 @@ func (s *ADKStepSource) NextSteps(ctx context.Context, state coreruntime.State) 
 				continue
 			}
 
+			s.pendingAck = batch.ack
 			return batch.steps, nil
 		}
 	}
@@ -111,7 +116,7 @@ func (s *ADKStepSource) run(ctx context.Context) {
 		s.RunOptions...,
 	) {
 		if err != nil {
-			s.ch <- stepBatch{err: err}
+			s.sendError(ctx, err)
 			return
 		}
 
@@ -120,12 +125,47 @@ func (s *ADKStepSource) run(ctx context.Context) {
 			continue
 		}
 
-		select {
-		case <-ctx.Done():
-			s.ch <- stepBatch{err: ctx.Err()}
+		if !s.sendSteps(ctx, steps) {
+
 			return
 
-		case s.ch <- stepBatch{steps: steps}:
 		}
+	}
+}
+
+func (s *ADKStepSource) ackPendingBatch() {
+	if s == nil || s.pendingAck == nil {
+		return
+	}
+
+	close(s.pendingAck)
+	s.pendingAck = nil
+}
+
+func (s *ADKStepSource) sendSteps(ctx context.Context, steps []coreruntime.Step) bool {
+	ack := make(chan struct{})
+
+	select {
+	case <-ctx.Done():
+		return false
+
+	case s.ch <- stepBatch{steps: steps, ack: ack}:
+	}
+
+	select {
+	case <-ctx.Done():
+		return false
+
+	case <-ack:
+		return true
+	}
+}
+
+func (s *ADKStepSource) sendError(ctx context.Context, err error) {
+	select {
+	case <-ctx.Done():
+		return
+
+	case s.ch <- stepBatch{err: err}:
 	}
 }
