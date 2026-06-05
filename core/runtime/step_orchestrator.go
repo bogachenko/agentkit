@@ -16,6 +16,9 @@ type StepRunCommand struct {
 	RunID     RunID
 	SessionID coresession.ID
 	MaxSteps  int
+
+	// TraceInput is optional dev-only trace content. Leave empty when message capture is disabled.
+	TraceInput string
 }
 
 // Validate rejects incomplete step-pipeline runs before the provider starts.
@@ -64,6 +67,8 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 		}
 	}()
 
+	o.setTraceInput(runSpan, command.TraceInput)
+
 	ledger, err := NewLedger(command.RunID)
 	if err != nil {
 		return RunResult{}, err
@@ -94,6 +99,8 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 	toolCallsUsed := 0
 	continuationsUsed := 0
 	maxContinuations := command.MaxSteps + 8
+	recoverableToolContinuationsUsed := 0
+	maxRecoverableToolContinuations := 5
 
 	for {
 		rawSteps, err := o.StepProvider.NextSteps(ctx, state)
@@ -150,6 +157,30 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 			switch step.Kind {
 			case StepKindToolResult:
 				if !step.ToolResult.OK {
+					if isRecoverableToolError(step) {
+						recoverableToolContinuationsUsed++
+						if recoverableToolContinuationsUsed > maxRecoverableToolContinuations {
+							return o.failedResult(ctx, command, ledger, state, Failure{
+								Code:    FailureCodeInvalidState,
+								Message: repeatedRecoverableToolFailureMessage(step, recoverableToolContinuationsUsed, maxRecoverableToolContinuations),
+							}, runSpan)
+						}
+
+						if o.addInternalInstruction(recoverableToolErrorInstruction(step, recoverableToolContinuationsUsed, maxRecoverableToolContinuations)) {
+							continuationsUsed++
+							if continuationsUsed > maxContinuations {
+								return o.failedResult(ctx, command, ledger, state, Failure{
+									Code:    FailureCodeInvalidState,
+									Message: "run reached max continuation attempts after recoverable browser tool errors",
+								}, runSpan)
+							}
+
+							continue
+						}
+
+						return o.failedResult(ctx, command, ledger, state, toolFailureFromResult(step.ToolName, step.ToolResult), runSpan)
+					}
+
 					if step.ToolResult.ErrorKind == ToolErrorValidation && o.addInternalInstruction(validationRecoveryInstruction(step)) {
 						continuationsUsed++
 						if continuationsUsed > maxContinuations {
@@ -254,6 +285,43 @@ func validationRecoveryInstruction(step Step) string {
 	return "The previous tool call failed validation: " + message + ". Correct the tool arguments and continue the task. Do not produce user-visible progress text."
 }
 
+func isRecoverableToolError(step Step) bool {
+	if step.Kind != StepKindToolResult || step.ToolResult.OK {
+		return false
+	}
+
+	message := strings.ToLower(strings.TrimSpace(step.ToolResult.ErrorMessage))
+
+	return strings.Contains(message, "stale_element_ref") ||
+		strings.Contains(message, "element ref is stale") ||
+		strings.Contains(message, "stale or unknown") ||
+		strings.Contains(message, "element_not_found") ||
+		strings.Contains(message, "element was not found")
+}
+
+func recoverableToolErrorInstruction(step Step, attempt int, maxAttempts int) string {
+	message := strings.TrimSpace(step.ToolResult.ErrorMessage)
+	if message == "" {
+		message = "browser tool returned a recoverable stale element reference error"
+	}
+
+	return fmt.Sprintf(
+		"The previous browser tool failed with a recoverable error: %s. This is recovery attempt %d/%d. Do not repeat the same ref, selector, html_mode, or browser action blindly. First call browser_observe on the same current work tab to get fresh state, then choose a different safe path if the intended element is missing. If enough evidence is already available, produce the final answer. Do not produce user-visible progress text.",
+		message,
+		attempt,
+		maxAttempts,
+	)
+}
+
+func repeatedRecoverableToolFailureMessage(step Step, attempt int, maxAttempts int) string {
+	message := strings.TrimSpace(step.ToolResult.ErrorMessage)
+	if message == "" {
+		message = "browser tool returned a repeated recoverable error"
+	}
+
+	return fmt.Sprintf("run stopped after repeated recoverable browser tool errors: attempt=%d max=%d last_tool=%s last_error=%s", attempt, maxAttempts, step.ToolName, message)
+}
+
 func (o StepOrchestrator) completedResult(
 	ctx context.Context,
 	command StepRunCommand,
@@ -264,6 +332,10 @@ func (o StepOrchestrator) completedResult(
 ) (RunResult, error) {
 	state.Status = RunStatusCompleted
 	state.UpdatedAt = o.Clock.Now()
+
+	if strings.TrimSpace(command.TraceInput) != "" {
+		o.setTraceOutput(runSpan, step.Text)
+	}
 
 	result := RunResult{
 		RunID:          command.RunID,
@@ -277,6 +349,7 @@ func (o StepOrchestrator) completedResult(
 		return RunResult{}, err
 	}
 
+	o.traceLedgerSummary(ctx, result.LedgerSummary)
 	o.traceEvent(runSpan, "agentkit.ledger.summary", ledgerSummaryTraceAttrs(result.LedgerSummary))
 	o.traceEvent(runSpan, "agentkit.run.completed", map[string]any{
 		"agentkit.run.status":           string(RunStatusCompleted),
@@ -325,11 +398,16 @@ func (o StepOrchestrator) failedResult(
 	state.Failure = &failure
 	state.UpdatedAt = o.Clock.Now()
 
+	if strings.TrimSpace(command.TraceInput) != "" {
+		o.setTraceOutput(runSpan, failureOutputText(failure))
+	}
+
 	if err := state.Validate(); err != nil {
 		return RunResult{}, err
 	}
 
 	o.traceError(runSpan, failure)
+	o.traceLedgerSummary(ctx, ledger.Summary())
 	o.traceEvent(runSpan, "agentkit.ledger.summary", ledgerSummaryTraceAttrs(ledger.Summary()))
 	o.traceEvent(runSpan, "agentkit.run.failed", failureTraceAttrs(failure))
 
@@ -390,12 +468,128 @@ func (o StepOrchestrator) traceError(span port.Span, failure Failure) {
 	span.RecordError(fmt.Errorf("%s: %s", string(failure.Code), failure.Message))
 }
 
+func (o StepOrchestrator) setTraceInput(span port.Span, input string) {
+	input = strings.TrimSpace(input)
+	if span == nil || input == "" {
+		return
+	}
+
+	span.SetAttributes(map[string]any{
+		"langfuse.trace.input": input,
+	})
+}
+
+func (o StepOrchestrator) setTraceOutput(span port.Span, output string) {
+	output = strings.TrimSpace(output)
+	if span == nil || output == "" {
+		return
+	}
+
+	span.SetAttributes(map[string]any{
+		"langfuse.trace.output": output,
+	})
+}
+
+func failureOutputText(failure Failure) string {
+	return strings.TrimSpace(fmt.Sprintf("%s: %s", string(failure.Code), failure.Message))
+}
+
+func (o StepOrchestrator) traceLedgerSummary(ctx context.Context, summary LedgerSummary) {
+	_, span := o.startTrace(ctx, "agentkit.ledger.summary", ledgerSummaryTraceAttrs(summary))
+	if span == nil {
+		return
+	}
+	defer span.End()
+
+	span.SetAttributes(map[string]any{
+		"langfuse.observation.output": ledgerSummaryText(summary),
+	})
+}
+
+func ledgerSummaryText(summary LedgerSummary) string {
+	return fmt.Sprintf(
+		"run_id=%s total_entries=%d steps=%d steps_completed=%d steps_failed=%d steps_blocked=%d tool_calls=%d tool_results=%d tool_errors=%d assistant_texts=%d final_responses=%d last_entry_kind=%s",
+		string(summary.RunID),
+		summary.TotalEntries,
+		summary.Steps,
+		summary.StepsCompleted,
+		summary.StepsFailed,
+		summary.StepsBlocked,
+		summary.ToolCalls,
+		summary.ToolResults,
+		summary.ToolErrors,
+		summary.AssistantTexts,
+		summary.FinalResponses,
+		string(summary.LastEntryKind),
+	)
+}
+
+func stepObservationAttrs(step Step) map[string]any {
+	attrs := map[string]any{
+		"langfuse.observation.input": traceStepInput(step),
+	}
+
+	if output := traceStepOutput(step); output != "" {
+		attrs["langfuse.observation.output"] = output
+	}
+
+	return attrs
+}
+
+func traceStepInput(step Step) string {
+	switch step.Kind {
+	case StepKindToolCall:
+		return truncateTraceText(fmt.Sprintf("tool=%s args=%v", string(step.ToolName), step.ToolArgs), 4000)
+
+	case StepKindToolResult:
+		return truncateTraceText(fmt.Sprintf("tool=%s call_id=%s", string(step.ToolName), step.ToolCallID), 4000)
+
+	case StepKindAssistantText:
+		return step.Description
+
+	default:
+		return step.Description
+	}
+}
+
+func traceStepOutput(step Step) string {
+	switch step.Kind {
+	case StepKindToolResult:
+		if !step.ToolResult.OK {
+			return truncateTraceText(step.ToolResult.ErrorMessage, 4000)
+		}
+		return truncateTraceText(fmt.Sprintf("%v", step.ToolResult.Raw), 4000)
+
+	case StepKindAssistantText:
+		return truncateTraceText(step.Text, 4000)
+
+	default:
+		return ""
+	}
+}
+
+func truncateTraceText(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 {
+		return value
+	}
+
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+
+	return string(runes[:limit]) + fmt.Sprintf("...[truncated %d chars]", len(runes)-limit)
+}
+
 func (o StepOrchestrator) traceStep(ctx context.Context, step Step) {
 	_, span := o.startTrace(ctx, traceStepName(step), stepTraceAttrs(step))
 	if span == nil {
 		return
 	}
 	defer span.End()
+
+	span.SetAttributes(stepObservationAttrs(step))
 
 	if step.Failure != nil {
 		o.traceError(span, *step.Failure)
