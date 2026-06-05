@@ -11,3 +11,9 @@ var ErrStepSourceDone = errors.New("runtime step source is done")
 type StepProvider interface {
 	NextSteps(ctx context.Context, state State) ([]Step, error)
 }
+
+// InternalInstructionReceiver is implemented by step providers that can accept
+// deterministic runtime-only continuation instructions between model turns.
+type InternalInstructionReceiver interface {
+	AddInternalInstruction(instruction string)
+}

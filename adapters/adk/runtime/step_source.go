@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 
 	coreruntime "github.com/bogachenko/agentkit/core/runtime"
 	"google.golang.org/adk/agent"
@@ -12,13 +11,11 @@ import (
 	"google.golang.org/genai"
 )
 
-type stepBatch struct {
-	steps []coreruntime.Step
-	err   error
-	ack   chan struct{}
-}
-
 // ADKStepSource converts ADK runner events into neutral AgentKit runtime steps.
+//
+// It intentionally consumes ADK Runner synchronously. Runner.Run already exposes a
+// pull-style iterator, and the harness must be able to decide when to continue
+// by injecting internal runtime instructions between ADK turns.
 type ADKStepSource struct {
 	Runner     *runner.Runner
 	UserID     string
@@ -27,9 +24,9 @@ type ADKStepSource struct {
 	RunConfig  agent.RunConfig
 	RunOptions []runner.RunOption
 
-	once       sync.Once
-	ch         chan stepBatch
-	pendingAck chan struct{}
+	started             bool
+	queue               []coreruntime.Step
+	pendingInstructions []string
 }
 
 // NewADKStepSource validates ADK execution inputs before runtime starts consuming steps.
@@ -67,57 +64,81 @@ func NewADKStepSource(
 	}, nil
 }
 
-// NextSteps returns the next ADK-derived step batch without exposing ADK events to core runtime.
-func (s *ADKStepSource) NextSteps(ctx context.Context, state coreruntime.State) ([]coreruntime.Step, error) {
+// AddInternalInstruction lets the deterministic harness continue an ADK run
+// without exposing runtime control text as normal user conversation history.
+func (s *ADKStepSource) AddInternalInstruction(instruction string) {
 	if s == nil {
-		return nil, fmt.Errorf("adk step source is nil")
+		return
 	}
 
-	s.once.Do(func() {
-		s.ch = make(chan stepBatch)
-		go s.run(ctx)
-	})
+	instruction = strings.TrimSpace(instruction)
+	if instruction == "" {
+		return
+	}
 
-	s.ackPendingBatch()
+	s.pendingInstructions = append(s.pendingInstructions, instruction)
+}
+
+// NextSteps returns the next ADK-derived step batch without exposing ADK events to core runtime.
+func (s *ADKStepSource) NextSteps(ctx context.Context, state coreruntime.State) ([]coreruntime.Step, error) {
+	if s == nil || s.Runner == nil {
+		return nil, fmt.Errorf("adk step source is not initialized")
+	}
+
+	if !s.started {
+		message := s.Message
+		if len(s.pendingInstructions) > 0 {
+			message = s.messageWithInternalInstructions(s.Message)
+		}
+
+		if err := s.runAndQueueSteps(ctx, message); err != nil {
+			return nil, err
+		}
+
+		s.started = true
+	}
 
 	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
+		if len(s.queue) > 0 {
+			step := s.queue[0]
+			s.queue = s.queue[1:]
+			return []coreruntime.Step{step}, nil
+		}
 
-		case batch, ok := <-s.ch:
-			if !ok {
-				return nil, coreruntime.ErrStepSourceDone
-			}
+		if len(s.pendingInstructions) == 0 {
+			return []coreruntime.Step{
+				{
+					Kind:        coreruntime.StepKindStreamDone,
+					Source:      coreruntime.StepSourceRuntime,
+					Status:      coreruntime.StepStatusCompleted,
+					Final:       true,
+					Description: "ADK stream completed",
+				},
+			}, nil
+		}
 
-			if batch.err != nil {
-				return nil, batch.err
-			}
-
-			if len(batch.steps) == 0 {
-				continue
-			}
-
-			s.pendingAck = batch.ack
-			return batch.steps, nil
+		message := s.nextInternalInstructionMessage()
+		if err := s.runAndQueueSteps(ctx, message); err != nil {
+			return nil, err
 		}
 	}
 }
 
-func (s *ADKStepSource) run(ctx context.Context) {
-	defer close(s.ch)
+func (s *ADKStepSource) runAndQueueSteps(ctx context.Context, message *genai.Content) error {
+	if message == nil {
+		return fmt.Errorf("adk step source message is required")
+	}
 
 	for event, err := range s.Runner.Run(
 		ctx,
 		s.UserID,
 		s.SessionID,
-		s.Message,
+		message,
 		s.RunConfig,
 		s.RunOptions...,
 	) {
 		if err != nil {
-			s.sendError(ctx, err)
-			return
+			return err
 		}
 
 		steps := StepsFromADKEvent(event)
@@ -125,47 +146,58 @@ func (s *ADKStepSource) run(ctx context.Context) {
 			continue
 		}
 
-		if !s.sendSteps(ctx, steps) {
+		s.queue = append(s.queue, steps...)
+	}
 
-			return
+	return nil
+}
 
+func (s *ADKStepSource) nextInternalInstructionMessage() *genai.Content {
+	return s.messageWithInternalInstructions(nil)
+}
+
+func (s *ADKStepSource) messageWithInternalInstructions(base *genai.Content) *genai.Content {
+	instructions := s.pendingInstructions
+	s.pendingInstructions = nil
+
+	parts := make([]*genai.Part, 0)
+
+	if base != nil {
+		for _, part := range base.Parts {
+			if part == nil {
+				continue
+			}
+
+			parts = append(parts, part)
 		}
 	}
-}
 
-func (s *ADKStepSource) ackPendingBatch() {
-	if s == nil || s.pendingAck == nil {
-		return
+	if len(instructions) > 0 {
+		parts = append(parts, &genai.Part{
+			Text: runtimeHarnessInstructionText(instructions),
+		})
 	}
 
-	close(s.pendingAck)
-	s.pendingAck = nil
-}
-
-func (s *ADKStepSource) sendSteps(ctx context.Context, steps []coreruntime.Step) bool {
-	ack := make(chan struct{})
-
-	select {
-	case <-ctx.Done():
-		return false
-
-	case s.ch <- stepBatch{steps: steps, ack: ack}:
-	}
-
-	select {
-	case <-ctx.Done():
-		return false
-
-	case <-ack:
-		return true
+	return &genai.Content{
+		Role:  genai.RoleUser,
+		Parts: parts,
 	}
 }
 
-func (s *ADKStepSource) sendError(ctx context.Context, err error) {
-	select {
-	case <-ctx.Done():
-		return
+func runtimeHarnessInstructionText(instructions []string) string {
+	var builder strings.Builder
 
-	case s.ch <- stepBatch{err: err}:
+	builder.WriteString("<runtime_harness_instruction>\n")
+	for _, instruction := range instructions {
+		instruction = strings.TrimSpace(instruction)
+		if instruction == "" {
+			continue
+		}
+
+		builder.WriteString(instruction)
+		builder.WriteString("\n")
 	}
+	builder.WriteString("</runtime_harness_instruction>")
+
+	return builder.String()
 }

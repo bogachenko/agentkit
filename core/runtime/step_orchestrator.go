@@ -92,6 +92,8 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 	}
 
 	toolCallsUsed := 0
+	continuationsUsed := 0
+	maxContinuations := command.MaxSteps + 8
 
 	for {
 		rawSteps, err := o.StepProvider.NextSteps(ctx, state)
@@ -125,6 +127,7 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 					Message: err.Error(),
 				}, runSpan)
 			}
+
 			if step.Kind == StepKindToolCall {
 				toolCallsUsed++
 			}
@@ -144,39 +147,72 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 
 			o.traceStep(ctx, step)
 
-			if step.Kind == StepKindToolResult && !step.ToolResult.OK {
-				return o.failedResult(ctx, command, ledger, state, toolFailureFromResult(step.ToolName, step.ToolResult), runSpan)
-			}
-			if step.Kind == StepKindAssistantText && step.Final {
-				state.Status = RunStatusCompleted
-				state.UpdatedAt = o.Clock.Now()
+			switch step.Kind {
+			case StepKindToolResult:
+				if !step.ToolResult.OK {
+					if step.ToolResult.ErrorKind == ToolErrorValidation && o.addInternalInstruction(validationRecoveryInstruction(step)) {
+						continuationsUsed++
+						if continuationsUsed > maxContinuations {
+							return o.failedResult(ctx, command, ledger, state, Failure{
+								Code:    FailureCodeInvalidState,
+								Message: "run reached max continuation attempts after validation errors",
+							}, runSpan)
+						}
 
-				result := RunResult{
-					RunID:          command.RunID,
-					Status:         RunStatusCompleted,
-					FinalMessage:   finalMessageFromText(step.Text),
-					LedgerSummary:  ledger.Summary(),
-					StepsCompleted: state.StepCount,
+						continue
+					}
+
+					return o.failedResult(ctx, command, ledger, state, toolFailureFromResult(step.ToolName, step.ToolResult), runSpan)
 				}
 
-				if err := result.Validate(); err != nil {
-					return RunResult{}, err
+			case StepKindAssistantText:
+				if !step.Final {
+					if o.addInternalInstruction(continueTaskInstruction()) {
+						continuationsUsed++
+						if continuationsUsed > maxContinuations {
+							return o.failedResult(ctx, command, ledger, state, Failure{
+								Code:    FailureCodeInvalidState,
+								Message: "run reached max continuation attempts without terminal response",
+							}, runSpan)
+						}
+					}
+
+					continue
 				}
 
-				o.traceEvent(runSpan, "agentkit.ledger.summary", ledgerSummaryTraceAttrs(result.LedgerSummary))
-				o.traceEvent(runSpan, "agentkit.run.completed", map[string]any{
-					"agentkit.run.status":           string(RunStatusCompleted),
-					"agentkit.steps_completed":      result.StepsCompleted,
-					"agentkit.ledger.total_entries": result.LedgerSummary.TotalEntries,
-				})
+				if state.ToolCalls > 0 && state.EvidenceCount == 0 {
+					if o.addInternalInstruction(finalWithoutEvidenceInstruction()) {
+						continuationsUsed++
+						if continuationsUsed > maxContinuations {
+							return o.failedResult(ctx, command, ledger, state, Failure{
+								Code:    FailureCodeInvalidState,
+								Message: "run reached max continuation attempts without tool evidence",
+							}, runSpan)
+						}
 
-				if err := o.publish(ctx, port.EventTypeCompleted, command, map[string]any{
-					"status": string(RunStatusCompleted),
-				}); err != nil {
-					return RunResult{}, err
+						continue
+					}
 				}
 
-				return result, nil
+				return o.completedResult(ctx, command, ledger, state, step, runSpan)
+
+			case StepKindStreamDone:
+				if o.addInternalInstruction(streamDoneWithoutFinalInstruction()) {
+					continuationsUsed++
+					if continuationsUsed > maxContinuations {
+						return o.failedResult(ctx, command, ledger, state, Failure{
+							Code:    FailureCodeInvalidState,
+							Message: "run finished without final response",
+						}, runSpan)
+					}
+
+					continue
+				}
+
+				return o.failedResult(ctx, command, ledger, state, Failure{
+					Code:    FailureCodeInvalidState,
+					Message: "run finished without final response",
+				}, runSpan)
 			}
 		}
 	}
@@ -185,6 +221,76 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 		Code:    FailureCodeInvalidState,
 		Message: "run finished without final response",
 	}, runSpan)
+}
+
+func (o StepOrchestrator) addInternalInstruction(instruction string) bool {
+	receiver, ok := o.StepProvider.(InternalInstructionReceiver)
+	if !ok || receiver == nil {
+		return false
+	}
+
+	receiver.AddInternalInstruction(instruction)
+	return true
+}
+
+func continueTaskInstruction() string {
+	return "Continue the task. Do not produce user-visible progress text. Use the available tool evidence and continue using tools if the requested result has not been obtained yet. Produce a final answer only after the user's request is actually satisfied."
+}
+
+func finalWithoutEvidenceInstruction() string {
+	return "The previous assistant text attempted to answer before confirmed tool evidence was available. Continue the task. Do not produce user-visible progress text. Use tools to collect the required evidence, then produce the final answer."
+}
+
+func streamDoneWithoutFinalInstruction() string {
+	return "The previous turn ended without a final answer. Continue the task. Do not produce user-visible progress text. Produce the final answer only when the user's requested result is satisfied."
+}
+
+func validationRecoveryInstruction(step Step) string {
+	message := strings.TrimSpace(step.ToolResult.ErrorMessage)
+	if message == "" {
+		message = "tool returned validation error"
+	}
+
+	return "The previous tool call failed validation: " + message + ". Correct the tool arguments and continue the task. Do not produce user-visible progress text."
+}
+
+func (o StepOrchestrator) completedResult(
+	ctx context.Context,
+	command StepRunCommand,
+	ledger *Ledger,
+	state State,
+	step Step,
+	runSpan port.Span,
+) (RunResult, error) {
+	state.Status = RunStatusCompleted
+	state.UpdatedAt = o.Clock.Now()
+
+	result := RunResult{
+		RunID:          command.RunID,
+		Status:         RunStatusCompleted,
+		FinalMessage:   finalMessageFromText(step.Text),
+		LedgerSummary:  ledger.Summary(),
+		StepsCompleted: state.StepCount,
+	}
+
+	if err := result.Validate(); err != nil {
+		return RunResult{}, err
+	}
+
+	o.traceEvent(runSpan, "agentkit.ledger.summary", ledgerSummaryTraceAttrs(result.LedgerSummary))
+	o.traceEvent(runSpan, "agentkit.run.completed", map[string]any{
+		"agentkit.run.status":           string(RunStatusCompleted),
+		"agentkit.steps_completed":      result.StepsCompleted,
+		"agentkit.ledger.total_entries": result.LedgerSummary.TotalEntries,
+	})
+
+	if err := o.publish(ctx, port.EventTypeCompleted, command, map[string]any{
+		"status": string(RunStatusCompleted),
+	}); err != nil {
+		return RunResult{}, err
+	}
+
+	return result, nil
 }
 
 func (o StepOrchestrator) validateDependencies() error {
