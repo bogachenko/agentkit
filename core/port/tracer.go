@@ -9,6 +9,7 @@ type Tracer interface {
 
 // Span gives core a minimal tracing contract without importing OpenTelemetry.
 type Span interface {
+	SetAttributes(attrs map[string]any)
 	AddEvent(name string, attrs map[string]any)
 	RecordError(err error)
 	End()

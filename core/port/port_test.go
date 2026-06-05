@@ -44,6 +44,7 @@ func (fakeTracer) Start(ctx context.Context, name string, attrs map[string]any) 
 
 type fakeSpan struct{}
 
+func (fakeSpan) SetAttributes(attrs map[string]any)         {}
 func (fakeSpan) AddEvent(name string, attrs map[string]any) {}
 
 func (fakeSpan) RecordError(err error) {}
