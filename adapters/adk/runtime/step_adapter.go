@@ -124,13 +124,15 @@ func toolResultFromFunctionResponse(raw any) coreruntime.ToolExecutionResult {
 	if explicitOK, exists, err := explicitBool(m, "ok"); err != nil {
 		return failedToolResult(coreruntime.ToolErrorValidation, err.Error(), raw)
 	} else if exists && !explicitOK {
-		return failedToolResult(explicitToolErrorKind(m), explicitToolErrorMessage(m), raw)
+		message := explicitToolErrorMessage(m)
+		return failedToolResult(classifyStructuredToolErrorKind(explicitToolErrorKind(m), message), message, raw)
 	}
 
 	if explicitSuccess, exists, err := explicitBool(m, "success"); err != nil {
 		return failedToolResult(coreruntime.ToolErrorValidation, err.Error(), raw)
 	} else if exists && !explicitSuccess {
-		return failedToolResult(explicitToolErrorKind(m), explicitToolErrorMessage(m), raw)
+		message := explicitToolErrorMessage(m)
+		return failedToolResult(classifyStructuredToolErrorKind(explicitToolErrorKind(m), message), message, raw)
 	}
 
 	if kind := explicitToolErrorKind(m); kind != coreruntime.ToolErrorNone {
@@ -138,7 +140,7 @@ func toolResultFromFunctionResponse(raw any) coreruntime.ToolExecutionResult {
 	}
 
 	if message := explicitStructuredErrorMessage(m); message != "" {
-		return failedToolResult(coreruntime.ToolErrorFatal, message, raw)
+		return failedToolResult(classifyStructuredToolErrorKind(coreruntime.ToolErrorNone, message), message, raw)
 	}
 
 	return coreruntime.ToolExecutionResult{
@@ -219,6 +221,82 @@ func explicitToolErrorMessage(m map[string]any) string {
 	}
 
 	return ""
+}
+
+func classifyStructuredToolErrorKind(explicit coreruntime.ToolErrorKind, message string) coreruntime.ToolErrorKind {
+	switch explicit {
+	case coreruntime.ToolErrorValidation, coreruntime.ToolErrorAuth, coreruntime.ToolErrorClientHold:
+		return explicit
+	case coreruntime.ToolErrorNone, coreruntime.ToolErrorFatal:
+		// Continue below: legacy wrappers often omit error_kind or use fatal for input-contract errors.
+	default:
+		return coreruntime.ToolErrorFatal
+	}
+
+	message = strings.TrimSpace(strings.ToLower(message))
+	if message == "" {
+		if explicit == coreruntime.ToolErrorFatal {
+			return coreruntime.ToolErrorFatal
+		}
+		return coreruntime.ToolErrorFatal
+	}
+
+	if isStructuredValidationToolError(message) {
+		return coreruntime.ToolErrorValidation
+	}
+
+	if isStructuredBrowserRuntimeToolError(message) {
+		return coreruntime.ToolErrorClientHold
+	}
+
+	if explicit == coreruntime.ToolErrorFatal {
+		return coreruntime.ToolErrorFatal
+	}
+
+	return coreruntime.ToolErrorFatal
+}
+func isStructuredValidationToolError(message string) bool {
+	needles := []string{
+		"validating root",
+		"unexpected additional properties",
+		"additional property",
+		"missing required",
+		"required field",
+		"cannot unmarshal",
+		"invalid argument",
+		"invalid arguments",
+		"invalid_input",
+		"unsupported html mode",
+		"unsupported mode",
+		"schema",
+	}
+
+	for _, needle := range needles {
+		if strings.Contains(message, needle) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isStructuredBrowserRuntimeToolError(message string) bool {
+	needles := []string{
+		"element_not_found",
+		"stale_element_ref",
+		"browser_not_initialized",
+		"tab is closed",
+		"browser operation timed out",
+		"context canceled",
+	}
+
+	for _, needle := range needles {
+		if strings.Contains(message, needle) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func explicitStructuredErrorMessage(m map[string]any) string {

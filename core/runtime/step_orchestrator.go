@@ -282,7 +282,16 @@ func validationRecoveryInstruction(step Step) string {
 		message = "tool returned validation error"
 	}
 
-	return "The previous tool call failed validation: " + message + ". Correct the tool arguments and continue the task. Do not produce user-visible progress text."
+	toolName := strings.TrimSpace(string(step.ToolName))
+	if toolName == "" {
+		toolName = "the selected tool"
+	}
+
+	return fmt.Sprintf(
+		"The previous tool call for %s failed argument/schema validation: %s. Correct the arguments using only fields allowed by that tool schema, remove unknown fields, and continue the task. Do not retry the same invalid argument object. Do not produce user-visible progress text.",
+		toolName,
+		message,
+	)
 }
 
 func isRecoverableToolError(step Step) bool {
@@ -747,10 +756,12 @@ func stepTraceAttrs(step Step) map[string]any {
 	if step.Kind == StepKindToolResult {
 		attrs["agentkit.tool_result.ok"] = step.ToolResult.OK
 		attrs["agentkit.tool_result.has_evidence"] = step.ToolResult.HasEvidence
+		attrs["agentkit.tool_result.recoverable"] = false
 
 		if !step.ToolResult.OK {
 			attrs["agentkit.tool_result.error_kind"] = string(step.ToolResult.ErrorKind)
 			attrs["agentkit.tool_result.error_message"] = step.ToolResult.ErrorMessage
+			attrs["agentkit.tool_result.recoverable"] = step.ToolResult.ErrorKind == ToolErrorValidation || isRecoverableToolError(step)
 		}
 	}
 
