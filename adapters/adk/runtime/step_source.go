@@ -24,9 +24,11 @@ type ADKStepSource struct {
 	RunConfig  agent.RunConfig
 	RunOptions []runner.RunOption
 
-	started             bool
-	queue               []coreruntime.Step
-	pendingInstructions []string
+	started                          bool
+	queue                            []coreruntime.Step
+	pendingInstructions              []string
+	emptyAssistantContentRetries     int
+	malformedToolCallArgumentRetries int
 }
 
 // NewADKStepSource validates ADK execution inputs before runtime starts consuming steps.
@@ -138,6 +140,9 @@ func (s *ADKStepSource) runAndQueueSteps(ctx context.Context, message *genai.Con
 		s.RunOptions...,
 	) {
 		if err != nil {
+			if s.handleRecoverableModelProtocolError(err) {
+				return nil
+			}
 			return err
 		}
 
@@ -150,6 +155,89 @@ func (s *ADKStepSource) runAndQueueSteps(ctx context.Context, message *genai.Con
 	}
 
 	return nil
+}
+
+func (s *ADKStepSource) handleRecoverableModelProtocolError(err error) bool {
+	if s.handleEmptyAssistantContentError(err) {
+		return true
+	}
+
+	if !isMalformedToolCallArgumentsError(err) {
+		return false
+	}
+
+	if s.malformedToolCallArgumentRetries >= 2 {
+		return false
+	}
+
+	s.malformedToolCallArgumentRetries++
+	s.pendingInstructions = append(s.pendingInstructions, malformedToolCallArgumentsRecoveryInstruction(err, s.malformedToolCallArgumentRetries))
+	return true
+}
+
+func isMalformedToolCallArgumentsError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	if message == "" {
+		return false
+	}
+
+	return strings.Contains(message, "decode tool call arguments for") ||
+		strings.Contains(message, "tool call arguments") && (strings.Contains(message, "unexpected end of json input") ||
+			strings.Contains(message, "invalid character") ||
+			strings.Contains(message, "cannot unmarshal") ||
+			strings.Contains(message, "json"))
+}
+
+func malformedToolCallArgumentsRecoveryInstruction(err error, attempt int) string {
+	message := strings.TrimSpace(err.Error())
+	if message == "" {
+		message = "tool call arguments were not valid JSON"
+	}
+
+	return fmt.Sprintf(
+		"The previous model response contained malformed tool call arguments and the runtime could not decode them: %s. This is automatic runtime recovery attempt %d/2. Continue the same task from the current session state. If you need to call a tool, emit exactly one complete valid JSON object that conforms to the selected tool schema. Do not truncate JSON, do not include comments, do not include markdown, and do not place non-JSON payload outside schema fields. If you cannot safely continue, produce a concise final answer explaining what was completed and what failed. Do not return an empty response.",
+		message,
+		attempt,
+	)
+}
+
+func (s *ADKStepSource) handleEmptyAssistantContentError(err error) bool {
+	if !isEmptyAssistantContentError(err) {
+		return false
+	}
+
+	if s.emptyAssistantContentRetries >= 2 {
+		return false
+	}
+
+	s.emptyAssistantContentRetries++
+	s.pendingInstructions = append(s.pendingInstructions, emptyAssistantContentRecoveryInstruction(s.emptyAssistantContentRetries))
+	return true
+}
+
+func isEmptyAssistantContentError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	if message == "" {
+		return false
+	}
+
+	return strings.Contains(message, "chat completion response has empty assistant content") ||
+		strings.Contains(message, "empty assistant content")
+}
+
+func emptyAssistantContentRecoveryInstruction(attempt int) string {
+	return fmt.Sprintf(
+		"The previous model response was empty: it had no assistant text and no tool calls. This is automatic runtime recovery attempt %d/2. Continue the task from the current session state. Either call the next useful tool or produce a concise final answer. Do not return an empty response. If the browser tab is closed, detached, or browser_not_initialized, first restore browser state by navigating to the needed page again and then call browser_observe.",
+		attempt,
+	)
 }
 
 func (s *ADKStepSource) nextInternalInstructionMessage() *genai.Content {

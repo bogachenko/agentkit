@@ -291,26 +291,120 @@ func isRecoverableToolError(step Step) bool {
 	}
 
 	message := strings.ToLower(strings.TrimSpace(step.ToolResult.ErrorMessage))
+	if message == "" {
+		return false
+	}
 
-	return strings.Contains(message, "stale_element_ref") ||
-		strings.Contains(message, "element ref is stale") ||
-		strings.Contains(message, "stale or unknown") ||
-		strings.Contains(message, "element_not_found") ||
-		strings.Contains(message, "element was not found")
+	if strings.Contains(message, "tool ") && strings.Contains(message, " not found") {
+		return true
+	}
+
+	if strings.Contains(message, "unknown tool") ||
+		strings.Contains(message, "function not found") ||
+		strings.Contains(message, "not registered") ||
+		strings.Contains(message, "available tools:") {
+		return true
+	}
+
+	recoverableFragments := []string{
+		"stale_element_ref",
+		"element ref is stale",
+		"stale or unknown",
+		"browser_not_initialized",
+		"attached browser tab is closed",
+		"browser tab is closed",
+		"target closed",
+		"target page, context or browser has been closed",
+		"page closed",
+		"tab closed",
+		"element_not_found",
+		"execution context was destroyed",
+		"detached frame",
+		"browser operation timed out",
+		"context deadline exceeded",
+		"net::err_timed_out",
+		"navigation timeout",
+		"timeout waiting for",
+	}
+
+	for _, fragment := range recoverableFragments {
+		if strings.Contains(message, fragment) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isRecoverableBrowserRuntimeToolError(message string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	if normalized == "" {
+		return false
+	}
+
+	recoverableFragments := []string{
+		"browser_not_initialized",
+		"attached browser tab is closed",
+		"browser tab is closed",
+		"target closed",
+		"target page, context or browser has been closed",
+		"page closed",
+		"tab closed",
+		"stale_element_ref",
+		"element ref is stale",
+		"element_not_found",
+		"execution context was destroyed",
+		"detached frame",
+		"browser operation timed out",
+		"context deadline exceeded",
+		"net::err_timed_out",
+		"navigation timeout",
+		"timeout waiting for",
+	}
+
+	for _, fragment := range recoverableFragments {
+		if strings.Contains(normalized, fragment) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func recoverableToolErrorInstruction(step Step, attempt int, maxAttempts int) string {
 	message := strings.TrimSpace(step.ToolResult.ErrorMessage)
 	if message == "" {
-		message = "browser tool returned a recoverable stale element reference error"
+		message = "tool returned a recoverable runtime error"
+	}
+
+	if isUnknownToolNameError(message) {
+		return fmt.Sprintf(
+			"The previous tool call used a tool name that is not registered: %s. This is recovery attempt %d/%d. Do not call nonexistent tools. Use only tool names from the available tools list in the error message. If no equivalent registered tool exists, stop and return partial results with the exact reason. Do not produce user-visible progress text.",
+			message,
+			attempt,
+			maxAttempts,
+		)
 	}
 
 	return fmt.Sprintf(
-		"The previous browser tool failed with a recoverable error: %s. This is recovery attempt %d/%d. Do not repeat the same ref, selector, html_mode, or browser action blindly. First call browser_observe on the same current work tab to get fresh state, then choose a different safe path if the intended element is missing. If enough evidence is already available, produce the final answer. Do not produce user-visible progress text.",
+		"The previous browser tool failed with a recoverable error: %s. This is recovery attempt %d/%d. browser runtime recovery: If the tab is closed, detached, or browser_not_initialized, call browser_navigate to reopen the needed page, then call browser_observe. If refs are stale or elements are missing, call browser_observe and use only fresh refs. Do not retry the same stale ref or exact failed low-level action. After repeated failure, return partial results with the reason instead of looping. Do not produce user-visible progress text.",
 		message,
 		attempt,
 		maxAttempts,
 	)
+}
+
+func isUnknownToolNameError(message string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	if normalized == "" {
+		return false
+	}
+
+	return strings.Contains(normalized, "tool ") && strings.Contains(normalized, " not found") ||
+		strings.Contains(normalized, "unknown tool") ||
+		strings.Contains(normalized, "function not found") ||
+		strings.Contains(normalized, "not registered") ||
+		strings.Contains(normalized, "available tools:")
 }
 
 func repeatedRecoverableToolFailureMessage(step Step, attempt int, maxAttempts int) string {
