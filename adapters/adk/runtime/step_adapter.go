@@ -176,11 +176,23 @@ func failedToolResult(kind coreruntime.ToolErrorKind, message string, raw any) c
 
 	return coreruntime.ToolExecutionResult{
 		OK:           false,
-		HasEvidence:  false,
+		HasEvidence:  hasFailedToolEvidence(raw),
 		ErrorKind:    kind,
 		ErrorMessage: message,
 		Raw:          raw,
 	}
+}
+
+func hasFailedToolEvidence(raw any) bool {
+	if raw == nil {
+		return false
+	}
+
+	if m, ok := raw.(map[string]any); ok {
+		return len(m) > 0
+	}
+
+	return true
 }
 
 func explicitToolErrorKind(m map[string]any) coreruntime.ToolErrorKind {

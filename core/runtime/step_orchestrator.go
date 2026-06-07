@@ -282,16 +282,7 @@ func validationRecoveryInstruction(step Step) string {
 		message = "tool returned validation error"
 	}
 
-	toolName := strings.TrimSpace(string(step.ToolName))
-	if toolName == "" {
-		toolName = "the selected tool"
-	}
-
-	return fmt.Sprintf(
-		"The previous tool call for %s failed argument/schema validation: %s. Correct the arguments using only fields allowed by that tool schema, remove unknown fields, and continue the task. Do not retry the same invalid argument object. Do not produce user-visible progress text.",
-		toolName,
-		message,
-	)
+	return "The previous tool call returned a validation error result: " + message + ". Treat this as confirmed tool evidence. If the user requested the raw error, a negative test, exact tool result, or validation behavior, produce the final answer from this error without retrying the tool call. Retry with corrected arguments only if the user requested a successful result and the requested result has not been obtained. Do not claim the invalid call is prohibited by system instructions; the tool call was executed and returned a validation result. Do not produce user-visible progress text."
 }
 
 func isRecoverableToolError(step Step) bool {

@@ -57,6 +57,10 @@ func (u StateUpdater) Apply(state *State, step Step) (Step, error) {
 		state.LastToolError = prepared.ToolResult.ErrorMessage
 		state.LastToolErrorKind = prepared.ToolResult.ErrorKind
 
+		if prepared.ToolResult.HasEvidence {
+			state.EvidenceCount++
+		}
+
 	case StepKindAssistantText:
 		if prepared.Final {
 			state.FinalText = prepared.Text
