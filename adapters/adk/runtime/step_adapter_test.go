@@ -42,6 +42,43 @@ func TestToolResultFromFunctionResponseClassifiesGenericSchemaErrors(t *testing.
 	}
 }
 
+func TestToolResultFromFunctionResponseClassifiesCodedDomainFailureAsValidation(t *testing.T) {
+	result := toolResultFromFunctionResponse(map[string]any{
+		"ok":      false,
+		"code":    "revision_conflict",
+		"message": "skill authoring project revision conflict",
+	})
+
+	if result.OK {
+		t.Fatalf("expected failed tool result")
+	}
+
+	if result.ErrorKind != coreruntime.ToolErrorValidation {
+		t.Fatalf("expected validation error kind, got %q", result.ErrorKind)
+	}
+
+	if result.ErrorMessage != "skill authoring project revision conflict" {
+		t.Fatalf("expected message field to be used, got %q", result.ErrorMessage)
+	}
+}
+
+func TestToolResultFromFunctionResponseKeepsExplicitFatalCodedFailureFatal(t *testing.T) {
+	result := toolResultFromFunctionResponse(map[string]any{
+		"ok":         false,
+		"code":       "internal_failure",
+		"message":    "internal failure",
+		"error_kind": "fatal",
+	})
+
+	if result.OK {
+		t.Fatalf("expected failed tool result")
+	}
+
+	if result.ErrorKind != coreruntime.ToolErrorFatal {
+		t.Fatalf("expected fatal error kind, got %q", result.ErrorKind)
+	}
+}
+
 func TestToolResultFromFunctionResponseKeepsNonValidationStructuredErrorFatal(t *testing.T) {
 	result := toolResultFromFunctionResponse(map[string]any{
 		"error": "browser process crashed while executing tool",
