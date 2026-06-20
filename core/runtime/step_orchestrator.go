@@ -17,6 +17,8 @@ type StepRunCommand struct {
 	SessionID coresession.ID
 	MaxSteps  int
 
+	RequireToolEvidenceBeforeFinal bool
+
 	// TraceInput is optional dev-only trace content. Leave empty when message capture is disabled.
 	TraceInput string
 }
@@ -211,7 +213,7 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 					continue
 				}
 
-				if state.ToolCalls > 0 && state.EvidenceCount == 0 {
+				if shouldSuppressFinalWithoutEvidence(command, state) {
 					if o.addInternalInstruction(finalWithoutEvidenceInstruction()) {
 						continuationsUsed++
 						if continuationsUsed > maxContinuations {
@@ -222,6 +224,13 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 						}
 
 						continue
+					}
+
+					if command.RequireToolEvidenceBeforeFinal {
+						return o.failedResult(ctx, command, ledger, state, Failure{
+							Code:    FailureCodeInvalidState,
+							Message: "run attempted final response before required tool evidence and step provider cannot receive internal instructions",
+						}, runSpan)
 					}
 				}
 
@@ -252,6 +261,14 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 		Code:    FailureCodeInvalidState,
 		Message: "run finished without final response",
 	}, runSpan)
+}
+
+func shouldSuppressFinalWithoutEvidence(command StepRunCommand, state State) bool {
+	if command.RequireToolEvidenceBeforeFinal {
+		return state.EvidenceCount == 0
+	}
+
+	return state.ToolCalls > 0 && state.EvidenceCount == 0
 }
 
 func (o StepOrchestrator) addInternalInstruction(instruction string) bool {

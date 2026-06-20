@@ -26,7 +26,15 @@ jobs:
 
       - name: Check formatting
         run: |
-          test -z "$(gofmt -l .)"
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "The following Go files are not gofmt-formatted:"
+            echo "$unformatted"
+            echo
+            echo "Run:"
+            echo "  gofmt -w $unformatted"
+            exit 1
+          fi
 
       - name: Run tests
         run: go test ./...
