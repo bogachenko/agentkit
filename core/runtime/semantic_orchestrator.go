@@ -5,6 +5,8 @@ import (
 	"fmt"
 )
 
+const semanticClassifierFailureMessage = "Failed to classify the request."
+
 type SemanticPublisher interface {
 	PublishFinal(ctx context.Context, message string) error
 	PublishBlocked(ctx context.Context, message string) error
@@ -49,7 +51,7 @@ func (o *SemanticOrchestrator) Run(ctx context.Context, input ClassifierInput) (
 
 	output, err := o.Classifier.Classify(ctx, input)
 	if err != nil {
-		if publishErr := o.Publisher.PublishFailure(ctx, "Не удалось классифицировать запрос."); publishErr != nil {
+		if publishErr := o.Publisher.PublishFailure(ctx, semanticClassifierFailureMessage); publishErr != nil {
 			return SemanticRunState{}, publishErr
 		}
 		return SemanticRunState{Phase: SemanticPhaseFailed}, err
