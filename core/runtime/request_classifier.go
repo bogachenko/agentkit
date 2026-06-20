@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	coresession "github.com/bogachenko/agentkit/core/session"
 )
 
 type RequestRoute string
@@ -24,6 +26,7 @@ type ToolCatalogItem struct {
 }
 
 type ClassifierInput struct {
+	SessionID            coresession.ID
 	UserPrompt           string
 	ConversationContext  []string
 	PendingUserInput     string
