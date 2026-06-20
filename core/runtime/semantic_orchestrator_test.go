@@ -56,6 +56,29 @@ func (r *fakeSemanticRunner) AddInternalInstruction(instruction string) {
 	}
 }
 
+func TestSemanticOrchestratorClassifierErrorPublishesFailure(t *testing.T) {
+	publisher := &fakeSemanticPublisher{}
+	runner := &fakeSemanticRunner{}
+	orchestrator, err := NewSemanticOrchestrator(fakeSemanticClassifier{err: context.Canceled}, runner, publisher)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := orchestrator.Run(context.Background(), ClassifierInput{UserPrompt: "status"})
+	if err == nil {
+		t.Fatal("expected classifier error")
+	}
+	if publisher.failure != semanticClassifierFailureMessage {
+		t.Fatalf("failure = %q", publisher.failure)
+	}
+	if state.Phase != SemanticPhaseFailed {
+		t.Fatalf("phase = %q", state.Phase)
+	}
+	if runner.called {
+		t.Fatal("runner was called")
+	}
+}
+
 func TestSemanticOrchestratorDirectAnswerDoesNotRunStepRunner(t *testing.T) {
 	publisher := &fakeSemanticPublisher{}
 	runner := &fakeSemanticRunner{}
