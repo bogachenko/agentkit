@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	coresession "github.com/bogachenko/agentkit/core/session"
 	"github.com/bogachenko/agentkit/core/port"
+	coresession "github.com/bogachenko/agentkit/core/session"
 )
 
 type capturingPortPublisher struct {
