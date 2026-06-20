@@ -225,6 +225,13 @@ func (o StepOrchestrator) Run(ctx context.Context, command StepRunCommand) (RunR
 
 						continue
 					}
+
+					if command.RequireToolEvidenceBeforeFinal {
+						return o.failedResult(ctx, command, ledger, state, Failure{
+							Code:    FailureCodeInvalidState,
+							Message: "run attempted final response before required tool evidence and step provider cannot receive internal instructions",
+						}, runSpan)
+					}
 				}
 
 				return o.completedResult(ctx, command, ledger, state, step, runSpan)
