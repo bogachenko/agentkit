@@ -2,7 +2,9 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/bogachenko/agentkit/core/llm"
@@ -52,11 +54,13 @@ func extractSemanticClassifierJSON(text string) (ClassifierOutput, error) {
 
 	var raw map[string]any
 	decoder := json.NewDecoder(strings.NewReader(text))
-	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&raw); err != nil {
 		return ClassifierOutput{}, fmt.Errorf("semantic classifier output must be valid JSON object: %w", err)
 	}
-	if decoder.More() {
+	var extra any
+	if err := decoder.Decode(&extra); err != nil && !errors.Is(err, io.EOF) {
+		return ClassifierOutput{}, fmt.Errorf("semantic classifier output must be valid JSON object: %w", err)
+	} else if err == nil {
 		return ClassifierOutput{}, fmt.Errorf("semantic classifier output must be valid JSON object")
 	}
 	return classifierOutputFromMap(raw)
