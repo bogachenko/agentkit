@@ -103,7 +103,7 @@ func TestSemanticOrchestratorMergesIncomingLedgerWithStoredLedger(t *testing.T) 
 	orchestrator.WithMemoryStore(store)
 
 	_, err = orchestrator.Run(context.Background(), ClassifierInput{
-		SessionID: sessionID,
+		SessionID:  sessionID,
 		UserPrompt: "status",
 		RunLedger:  &RunLedger{Artifacts: []RunLedgerArtifact{{ID: "a1"}}},
 	})
