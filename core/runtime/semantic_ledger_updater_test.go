@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -179,6 +180,21 @@ func TestSemanticLedgerStepProviderPassesInternalInstructionsThrough(t *testing.
 
 	if len(inner.instructions) != 1 || inner.instructions[0] != "x" {
 		t.Fatalf("instructions = %#v", inner.instructions)
+	}
+}
+
+func TestSemanticLedgerStepProviderNilInnerReturnsError(t *testing.T) {
+	wrapper := &semanticLedgerStepProvider{ledger: &RunLedger{}}
+
+	steps, err := wrapper.NextSteps(context.Background(), State{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if steps != nil {
+		t.Fatalf("steps = %#v", steps)
+	}
+	if !strings.Contains(err.Error(), "inner provider is required") {
+		t.Fatalf("error = %q", err.Error())
 	}
 }
 
