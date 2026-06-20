@@ -37,6 +37,12 @@ func (p *evidenceGateProvider) AddInternalInstruction(instruction string) {
 	p.instructions = append(p.instructions, instruction)
 }
 
+type immediateFinalProvider struct{}
+
+func (p immediateFinalProvider) NextSteps(context.Context, State) ([]Step, error) {
+	return []Step{{Kind: StepKindAssistantText, Source: StepSourceModel, Text: "premature final", Final: true}}, nil
+}
+
 func TestStepOrchestratorAllowsImmediateFinalByDefault(t *testing.T) {
 	provider := &evidenceGateProvider{}
 	orchestrator := testEvidenceGateStepOrchestrator(provider)
@@ -81,6 +87,32 @@ func TestStepOrchestratorSuppressesImmediateFinalWhenEvidenceRequired(t *testing
 	}
 	if result.StepsCompleted != 4 {
 		t.Fatalf("steps completed = %d", result.StepsCompleted)
+	}
+}
+
+func TestStepOrchestratorFailsStrictImmediateFinalWhenProviderCannotReceiveInstruction(t *testing.T) {
+	orchestrator := testEvidenceGateStepOrchestrator(immediateFinalProvider{})
+
+	result, err := orchestrator.Run(context.Background(), StepRunCommand{
+		RunID:                          RunID("run-strict-no-receiver"),
+		SessionID:                      session.ID("session-strict-no-receiver"),
+		MaxSteps:                       10,
+		RequireToolEvidenceBeforeFinal: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != RunStatusFailed {
+		t.Fatalf("status = %q", result.Status)
+	}
+	if result.Failure == nil {
+		t.Fatal("expected failure")
+	}
+	if !strings.Contains(result.Failure.Message, "step provider cannot receive internal instructions") {
+		t.Fatalf("failure message = %q", result.Failure.Message)
+	}
+	if result.FinalMessage != nil {
+		t.Fatalf("unexpected final message: %#v", result.FinalMessage)
 	}
 }
 
@@ -137,6 +169,22 @@ func TestSemanticStepRunnerAdapterAnswerFromContextAllowsFinalWithoutFreshEviden
 	}
 	if len(provider.instructions) != 0 {
 		t.Fatalf("unexpected instructions: %#v", provider.instructions)
+	}
+}
+
+func TestSemanticStepRunnerAdapterNilReturnsError(t *testing.T) {
+	var adapter *SemanticStepRunnerAdapter
+	ledger := &RunLedger{TaskID: "nil-adapter"}
+
+	state, err := adapter.Run(context.Background(), false, ledger)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if state.Phase != SemanticPhaseFailed {
+		t.Fatalf("phase = %q", state.Phase)
+	}
+	if state.Ledger != ledger {
+		t.Fatal("semantic ledger was not preserved")
 	}
 }
 
