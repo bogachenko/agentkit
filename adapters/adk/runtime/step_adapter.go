@@ -125,14 +125,14 @@ func toolResultFromFunctionResponse(raw any) coreruntime.ToolExecutionResult {
 		return failedToolResult(coreruntime.ToolErrorValidation, err.Error(), raw)
 	} else if exists && !explicitOK {
 		message := explicitToolErrorMessage(m)
-		return failedToolResult(classifyStructuredToolErrorKind(explicitToolErrorKind(m), message), message, raw)
+		return failedToolResult(classifyStructuredToolErrorKind(explicitToolErrorKind(m), explicitToolErrorCode(m), message), message, raw)
 	}
 
 	if explicitSuccess, exists, err := explicitBool(m, "success"); err != nil {
 		return failedToolResult(coreruntime.ToolErrorValidation, err.Error(), raw)
 	} else if exists && !explicitSuccess {
 		message := explicitToolErrorMessage(m)
-		return failedToolResult(classifyStructuredToolErrorKind(explicitToolErrorKind(m), message), message, raw)
+		return failedToolResult(classifyStructuredToolErrorKind(explicitToolErrorKind(m), explicitToolErrorCode(m), message), message, raw)
 	}
 
 	if kind := explicitToolErrorKind(m); kind != coreruntime.ToolErrorNone {
@@ -140,7 +140,7 @@ func toolResultFromFunctionResponse(raw any) coreruntime.ToolExecutionResult {
 	}
 
 	if message := explicitStructuredErrorMessage(m); message != "" {
-		return failedToolResult(classifyStructuredToolErrorKind(coreruntime.ToolErrorNone, message), message, raw)
+		return failedToolResult(classifyStructuredToolErrorKind(coreruntime.ToolErrorNone, explicitToolErrorCode(m), message), message, raw)
 	}
 
 	return coreruntime.ToolExecutionResult{
@@ -220,6 +220,7 @@ func explicitToolErrorMessage(m map[string]any) string {
 		"error_message",
 		"error",
 		"error_details",
+		"message",
 	} {
 		value, exists := m[key]
 		if !exists || value == nil {
@@ -235,7 +236,16 @@ func explicitToolErrorMessage(m map[string]any) string {
 	return ""
 }
 
-func classifyStructuredToolErrorKind(explicit coreruntime.ToolErrorKind, message string) coreruntime.ToolErrorKind {
+func explicitToolErrorCode(m map[string]any) string {
+	value, exists := m["code"]
+	if !exists || value == nil {
+		return ""
+	}
+
+	return strings.TrimSpace(fmt.Sprintf("%v", value))
+}
+
+func classifyStructuredToolErrorKind(explicit coreruntime.ToolErrorKind, code string, message string) coreruntime.ToolErrorKind {
 	switch explicit {
 	case coreruntime.ToolErrorValidation, coreruntime.ToolErrorAuth, coreruntime.ToolErrorClientHold:
 		return explicit
@@ -246,6 +256,7 @@ func classifyStructuredToolErrorKind(explicit coreruntime.ToolErrorKind, message
 	}
 
 	message = strings.TrimSpace(strings.ToLower(message))
+	code = strings.TrimSpace(strings.ToLower(code))
 	if message == "" {
 		if explicit == coreruntime.ToolErrorFatal {
 			return coreruntime.ToolErrorFatal
@@ -263,6 +274,10 @@ func classifyStructuredToolErrorKind(explicit coreruntime.ToolErrorKind, message
 
 	if explicit == coreruntime.ToolErrorFatal {
 		return coreruntime.ToolErrorFatal
+	}
+
+	if code != "" {
+		return coreruntime.ToolErrorValidation
 	}
 
 	return coreruntime.ToolErrorFatal
