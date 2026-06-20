@@ -62,9 +62,9 @@ func TestStepOrchestratorSuppressesImmediateFinalWhenEvidenceRequired(t *testing
 	orchestrator := testEvidenceGateStepOrchestrator(provider)
 
 	result, err := orchestrator.Run(context.Background(), StepRunCommand{
-		RunID:                         RunID("run-strict-final"),
-		SessionID:                     session.ID("session-strict-final"),
-		MaxSteps:                      10,
+		RunID:                          RunID("run-strict-final"),
+		SessionID:                      session.ID("session-strict-final"),
+		MaxSteps:                       10,
 		RequireToolEvidenceBeforeFinal: true,
 	})
 	if err != nil {
