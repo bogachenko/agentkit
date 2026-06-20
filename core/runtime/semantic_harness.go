@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	coresession "github.com/bogachenko/agentkit/core/session"
+	"github.com/bogachenko/agentkit/core/port"
 )
 
 type SemanticHarness struct {
@@ -91,6 +92,12 @@ func (h SemanticHarness) Run(ctx context.Context, command SemanticRunCommand) (S
 		Skills:               command.Skills,
 		SessionConstraints:   command.SessionConstraints,
 	})
+}
+
+func (h SemanticHarness) WithPortPublisher(publisher port.Publisher, clock port.Clock, runID RunID, sessionID coresession.ID) SemanticHarness {
+	next := h
+	next.Publisher = NewSemanticPublisherAdapter(publisher, clock, runID, sessionID)
+	return next
 }
 
 func (h SemanticHarness) validateDependencies() error {
