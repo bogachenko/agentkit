@@ -17,17 +17,31 @@ type evidenceGateProvider struct {
 
 func (p *evidenceGateProvider) NextSteps(context.Context, State) ([]Step, error) {
 	if len(p.instructions) == 0 {
-		return []Step{{Kind: StepKindAssistantText, Source: StepSourceModel, Text: "premature final", Final: true}}, nil
+		return []Step{
+			{Kind: StepKindAssistantText, Source: StepSourceModel, Text: "premature final", Final: true},
+		}, nil
 	}
 
 	p.index++
 	switch p.index {
 	case 1:
-		return []Step{{Kind: StepKindToolCall, Source: StepSourceModel, ToolCallID: "call-1", ToolName: tool.Name("lookup")}}, nil
+		return []Step{
+			{Kind: StepKindToolCall, Source: StepSourceModel, ToolCallID: "call-1", ToolName: tool.Name("lookup")},
+		}, nil
 	case 2:
-		return []Step{{Kind: StepKindToolResult, Source: StepSourceTool, ToolCallID: "call-1", ToolName: tool.Name("lookup"), ToolResult: ToolExecutionResult{OK: true, HasEvidence: true, Raw: map[string]any{"ok": true}}}}, nil
+		return []Step{
+			{
+				Kind:       StepKindToolResult,
+				Source:     StepSourceTool,
+				ToolCallID: "call-1",
+				ToolName:   tool.Name("lookup"),
+				ToolResult: ToolExecutionResult{OK: true, HasEvidence: true, Raw: map[string]any{"ok": true}},
+			},
+		}, nil
 	case 3:
-		return []Step{{Kind: StepKindAssistantText, Source: StepSourceModel, Text: "final with evidence", Final: true}}, nil
+		return []Step{
+			{Kind: StepKindAssistantText, Source: StepSourceModel, Text: "final with evidence", Final: true},
+		}, nil
 	default:
 		return nil, ErrStepSourceDone
 	}
@@ -40,7 +54,9 @@ func (p *evidenceGateProvider) AddInternalInstruction(instruction string) {
 type immediateFinalProvider struct{}
 
 func (p immediateFinalProvider) NextSteps(context.Context, State) ([]Step, error) {
-	return []Step{{Kind: StepKindAssistantText, Source: StepSourceModel, Text: "premature final", Final: true}}, nil
+	return []Step{
+		{Kind: StepKindAssistantText, Source: StepSourceModel, Text: "premature final", Final: true},
+	}, nil
 }
 
 func TestStepOrchestratorAllowsImmediateFinalByDefault(t *testing.T) {
