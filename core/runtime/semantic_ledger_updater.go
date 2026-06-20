@@ -125,6 +125,10 @@ type semanticLedgerStepProvider struct {
 }
 
 func (p *semanticLedgerStepProvider) NextSteps(ctx context.Context, state State) ([]Step, error) {
+	if p == nil || p.inner == nil {
+		return nil, fmt.Errorf("semantic ledger step provider inner provider is required")
+	}
+
 	steps, err := p.inner.NextSteps(ctx, state)
 	for _, step := range steps {
 		ApplySemanticStepToRunLedger(p.ledger, step)
@@ -133,6 +137,9 @@ func (p *semanticLedgerStepProvider) NextSteps(ctx context.Context, state State)
 }
 
 func (p *semanticLedgerStepProvider) AddInternalInstruction(instruction string) {
+	if p == nil || p.inner == nil {
+		return
+	}
 	if r, ok := p.inner.(InternalInstructionReceiver); ok && r != nil {
 		r.AddInternalInstruction(instruction)
 	}
