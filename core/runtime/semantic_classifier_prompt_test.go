@@ -3,6 +3,8 @@ package runtime
 import (
 	"strings"
 	"testing"
+
+	"github.com/bogachenko/agentkit/core/llm"
 )
 
 func TestBuildSemanticClassifierPromptIncludesRoutesAndStrictJSON(t *testing.T) {
@@ -34,12 +36,14 @@ func TestBuildSemanticClassifierPromptIncludesLedgerAndActiveTask(t *testing.T) 
 func TestBuildSemanticClassifierPromptIncludesToolsAndSources(t *testing.T) {
 	text := semanticPromptText(BuildSemanticClassifierPrompt(ClassifierInput{
 		UserPrompt: "run",
-		Tools: []ToolCatalogItem{{
-			Name:           "browser_open",
-			Description:    "open page",
-			RequiredInputs: []string{"url"},
-			Available:      true,
-		}},
+		Tools: []ToolCatalogItem{[
+			{
+				Name:           "browser_open",
+				Description:    "open page",
+				RequiredInputs: []string{"url"},
+				Available:      true,
+			},
+		]},
 		CredentialsOrSources: []string{"gmail connected"},
 	}))
 
