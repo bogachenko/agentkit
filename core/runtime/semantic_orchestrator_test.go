@@ -186,7 +186,7 @@ func TestSemanticOrchestratorAnswerFromContextRunsWithAllowFinalWithoutFreshEvid
 	}
 
 	_, err = orchestrator.Run(context.Background(), ClassifierInput{
-		UserPrompt: "summarize it",
+		UserPrompt:    "summarize it",
 		LedgerSummary: RunLedgerSummary{Present: true, UserGoal: "Audit WB card", CurrentPhase: "ready_to_answer"},
 	})
 	if err != nil {
