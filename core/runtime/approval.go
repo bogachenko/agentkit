@@ -1,6 +1,9 @@
 package runtime
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -15,6 +18,33 @@ type ApprovalID string
 func (id ApprovalID) Validate() error {
 	if strings.TrimSpace(string(id)) == "" {
 		return fmt.Errorf("approval id is required")
+	}
+
+	return nil
+}
+
+// ToolArgsHash binds approval to the exact canonical JSON tool arguments.
+type ToolArgsHash string
+
+// NewToolArgsHash returns a stable SHA-256 fingerprint for JSON-compatible tool arguments.
+func NewToolArgsHash(args map[string]any) (ToolArgsHash, error) {
+	if args == nil {
+		args = map[string]any{}
+	}
+
+	canonicalJSON, err := json.Marshal(args)
+	if err != nil {
+		return "", fmt.Errorf("tool args hash: %w", err)
+	}
+
+	sum := sha256.Sum256(canonicalJSON)
+	return ToolArgsHash(hex.EncodeToString(sum[:])), nil
+}
+
+// Validation prevents blank argument fingerprints from authorizing tool execution.
+func (h ToolArgsHash) Validate() error {
+	if strings.TrimSpace(string(h)) == "" {
+		return fmt.Errorf("tool args hash is required")
 	}
 
 	return nil
@@ -39,17 +69,18 @@ func (s ApprovalStatus) Validate() error {
 	}
 }
 
-// Approval binds user authorization to one explicit tool instead of broad implicit permission.
+// Approval binds user authorization to one explicit tool and exact tool arguments.
 type Approval struct {
-	ID        ApprovalID
-	RunID     RunID
-	ToolName  tool.Name
-	Status    ApprovalStatus
-	Reason    string
-	CreatedAt time.Time
+	ID           ApprovalID
+	RunID        RunID
+	ToolName     tool.Name
+	ToolArgsHash ToolArgsHash
+	Status       ApprovalStatus
+	Reason       string
+	CreatedAt    time.Time
 }
 
-// Validation ensures approvals are explicit, auditable, and scoped to one run/tool.
+// Validation ensures approvals are explicit, auditable, and scoped to one run/tool/args fingerprint.
 func (a Approval) Validate() error {
 	if err := a.ID.Validate(); err != nil {
 		return err
@@ -60,6 +91,10 @@ func (a Approval) Validate() error {
 	}
 
 	if err := a.ToolName.Validate(); err != nil {
+		return err
+	}
+
+	if err := a.ToolArgsHash.Validate(); err != nil {
 		return err
 	}
 
