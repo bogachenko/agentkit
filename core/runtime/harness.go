@@ -74,7 +74,7 @@ func (h Harness) Run(ctx context.Context, command RunCommand) (RunResult, error)
 			if err := h.publish(ctx, port.EventTypeBlocked, command, map[string]any{"status": string(RunStatusBlocked), "failure_code": string(failure.Code), "tool_name": string(decisionResult.Decision.ToolName)}); err != nil {
 				return RunResult{}, err
 			}
-			return h.blockedResult(command, ledger, RouteDecision{Kind: RouteKindBlocked, Reason: "Runtime requires user approval before tool execution.", Failure: &failure}, stepIndex+1)
+			return h.approvalBlockedResult(command, ledger, decisionResult.Decision, failure, stepIndex+1)
 		case RouteKindCallTool:
 			toolResultMessage, err := h.executeTool(ctx, command, ledger, decisionResult.Decision)
 			if err != nil {
@@ -152,6 +152,21 @@ func cloneRuntimeData(value map[string]any) map[string]any {
 		out[key] = item
 	}
 	return out
+}
+
+func (h Harness) approvalBlockedResult(command RunCommand, ledger *Ledger, decision RouteDecision, failure Failure, stepsCompleted int) (RunResult, error) {
+	result := RunResult{
+		RunID:          command.RunID,
+		Status:         RunStatusBlocked,
+		Decision:       &decision,
+		Failure:        &failure,
+		LedgerSummary:  ledger.Summary(),
+		StepsCompleted: stepsCompleted,
+	}
+	if err := result.Validate(); err != nil {
+		return RunResult{}, err
+	}
+	return result, nil
 }
 
 func (h Harness) blockedResult(command RunCommand, ledger *Ledger, decision RouteDecision, stepsCompleted int) (RunResult, error) {
