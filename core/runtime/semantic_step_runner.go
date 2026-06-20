@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"strings"
 )
 
@@ -26,7 +27,11 @@ func (r *SemanticStepRunnerAdapter) AddInternalInstruction(instruction string) {
 
 func (r *SemanticStepRunnerAdapter) Run(ctx context.Context, allowFinalWithoutFreshEvidence bool, ledger *RunLedger) (SemanticRunState, error) {
 	if r == nil {
-		return SemanticRunState{Phase: SemanticPhaseFailed, AllowFinalWithoutFreshEvidence: allowFinalWithoutFreshEvidence, Ledger: ledger}, nil
+		return SemanticRunState{
+			Phase:                          SemanticPhaseFailed,
+			AllowFinalWithoutFreshEvidence: allowFinalWithoutFreshEvidence,
+			Ledger:                         ledger,
+		}, fmt.Errorf("semantic step runner adapter is nil")
 	}
 
 	command := r.Command
