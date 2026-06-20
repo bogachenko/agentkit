@@ -33,11 +33,17 @@ func (r *SemanticStepRunnerAdapter) Run(ctx context.Context, allowFinalWithoutFr
 			Ledger:                         ledger,
 		}, fmt.Errorf("semantic step runner adapter is nil")
 	}
+	if ledger == nil {
+		ledger = &RunLedger{}
+	}
 
 	command := r.Command
 	command.RequireToolEvidenceBeforeFinal = !allowFinalWithoutFreshEvidence
 
-	result, err := r.Orchestrator.Run(ctx, command)
+	orchestrator := r.Orchestrator
+	orchestrator.StepProvider = &semanticLedgerStepProvider{inner: r.Orchestrator.StepProvider, ledger: ledger}
+
+	result, err := orchestrator.Run(ctx, command)
 	state := SemanticRunState{
 		Phase:                          semanticPhaseFromRunStatus(result.Status),
 		AllowFinalWithoutFreshEvidence: allowFinalWithoutFreshEvidence,
