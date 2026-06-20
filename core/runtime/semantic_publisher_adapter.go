@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	coresession "github.com/bogachenko/agentkit/core/session"
 	"github.com/bogachenko/agentkit/core/port"
+	coresession "github.com/bogachenko/agentkit/core/session"
 )
 
 type SemanticPublisherAdapter struct {
