@@ -36,14 +36,14 @@ func TestBuildSemanticClassifierPromptIncludesLedgerAndActiveTask(t *testing.T) 
 func TestBuildSemanticClassifierPromptIncludesToolsAndSources(t *testing.T) {
 	text := semanticPromptText(BuildSemanticClassifierPrompt(ClassifierInput{
 		UserPrompt: "run",
-		Tools: []ToolCatalogItem{[
+		Tools: []ToolCatalogItem{
 			{
 				Name:           "browser_open",
 				Description:    "open page",
 				RequiredInputs: []string{"url"},
 				Available:      true,
 			},
-		]},
+		},
 		CredentialsOrSources: []string{"gmail connected"},
 	}))
 
