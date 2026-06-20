@@ -34,19 +34,25 @@ func runtimeTestState() State {
 	}
 }
 
-func runtimeTestApproval(status ApprovalStatus) Approval {
+func runtimeTestApproval(status ApprovalStatus, args map[string]any) Approval {
+	argsHash, err := NewToolArgsHash(args)
+	if err != nil {
+		panic(err)
+	}
+
 	return Approval{
-		ID:        ApprovalID("approval-1"),
-		RunID:     RunID("run-1"),
-		ToolName:  tool.Name("write_product"),
-		Status:    status,
-		Reason:    "User explicitly approved this tool.",
-		CreatedAt: time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC),
+		ID:           ApprovalID("approval-1"),
+		RunID:        RunID("run-1"),
+		ToolName:     tool.Name("write_product"),
+		ToolArgsHash: argsHash,
+		Status:       status,
+		Reason:       "User explicitly approved this tool.",
+		CreatedAt:    time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC),
 	}
 }
 
 func TestApprovalValidateAcceptsValidApproval(t *testing.T) {
-	approval := runtimeTestApproval(ApprovalStatusApproved)
+	approval := runtimeTestApproval(ApprovalStatusApproved, nil)
 
 	if err := approval.Validate(); err != nil {
 		t.Fatalf("expected valid approval, got error: %v", err)
@@ -54,7 +60,7 @@ func TestApprovalValidateAcceptsValidApproval(t *testing.T) {
 }
 
 func TestApprovalValidateRejectsMissingReason(t *testing.T) {
-	approval := runtimeTestApproval(ApprovalStatusApproved)
+	approval := runtimeTestApproval(ApprovalStatusApproved, nil)
 	approval.Reason = "   "
 
 	if err := approval.Validate(); err == nil {
@@ -196,12 +202,44 @@ func TestValidatorValidateDecisionAllowsApprovalRequiredToolWithApprovedApproval
 			Reason:   "Model requested an explicit write tool call after approval.",
 		},
 		Approvals: []Approval{
-			runtimeTestApproval(ApprovalStatusApproved),
+			runtimeTestApproval(ApprovalStatusApproved, nil),
 		},
 	})
 
 	if err != nil {
 		t.Fatalf("expected approved decision to be allowed, got error: %v", err)
+	}
+}
+
+func TestValidatorValidateDecisionRejectsApprovalRequiredToolWithDifferentArgsApproval(t *testing.T) {
+	validator := Validator{
+		Policy: Policy{
+			ToolContracts: []tool.Contract{
+				runtimeTestToolContract(tool.Name("write_product"), false, true),
+			},
+		},
+	}
+
+	err := validator.ValidateDecision(ValidationInput{
+		State: runtimeTestState(),
+		Decision: RouteDecision{
+			Kind:     RouteKindCallTool,
+			ToolName: tool.Name("write_product"),
+			ToolArgs: map[string]any{"sku": "B"},
+			Reason:   "Model requested an explicit write tool call after approval.",
+		},
+		Approvals: []Approval{
+			runtimeTestApproval(ApprovalStatusApproved, map[string]any{"sku": "A"}),
+		},
+	})
+
+	var validationErr ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("expected ValidationError, got %T", err)
+	}
+
+	if validationErr.Code != ValidationCodeApprovalRequired {
+		t.Fatalf("expected approval_required code, got %q", validationErr.Code)
 	}
 }
 
@@ -222,7 +260,7 @@ func TestValidatorValidateDecisionRejectsApprovalRequiredToolWithRejectedApprova
 			Reason:   "Model requested an explicit write tool call after approval.",
 		},
 		Approvals: []Approval{
-			runtimeTestApproval(ApprovalStatusRejected),
+			runtimeTestApproval(ApprovalStatusRejected, nil),
 		},
 	})
 
@@ -296,7 +334,7 @@ func TestValidatorValidateDecisionRejectsApprovalWithDifferentRunID(t *testing.T
 		},
 	}
 
-	approval := runtimeTestApproval(ApprovalStatusApproved)
+	approval := runtimeTestApproval(ApprovalStatusApproved, nil)
 	approval.RunID = RunID("another-run")
 
 	err := validator.ValidateDecision(ValidationInput{
