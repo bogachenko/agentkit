@@ -157,7 +157,6 @@ func limitArtifacts(values []RunLedgerArtifact, limit int) []RunLedgerArtifact {
 }
 
 func compactStrings(values []string) []string {
-	// ponytail: semantic lists are tiny; switch to map-backed dedupe if ledgers become large.
 	out := make([]string, 0, len(values))
 	for _, value := range values {
 		value = strings.TrimSpace(value)
