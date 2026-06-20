@@ -7,7 +7,7 @@ func executionLedgerInstruction(input ClassifierInput) string {
 	if summary.IsZero() {
 		return ""
 	}
-	return semanticInstruction("Continue the task using the compact execution ledger below.\n" + ledgerSummaryText(summary))
+	return semanticInstruction("Continue the task using the compact execution ledger below.\n" + semanticRunLedgerSummaryText(summary))
 }
 
 func answerFromContextInstruction(input ClassifierInput) string {
@@ -20,7 +20,7 @@ func answerFromContextInstruction(input ClassifierInput) string {
 		"Use this memory as already retrieved task context.",
 		"Do not call additional tools unless the user explicitly asks to refresh, reload, retry, fetch new data, inspect a new source, export, or create a file.",
 		"If the memory is insufficient, say exactly what is missing.",
-		ledgerSummaryText(summary),
+		semanticRunLedgerSummaryText(summary),
 		activeTaskText(input.ActiveTask),
 	}, "\n"))
 }
@@ -43,7 +43,7 @@ func semanticInstruction(body string) string {
 	return "<runtime_harness_instruction>\n" + body + "\n</runtime_harness_instruction>"
 }
 
-func ledgerSummaryText(summary RunLedgerSummary) string {
+func semanticRunLedgerSummaryText(summary RunLedgerSummary) string {
 	if summary.IsZero() {
 		return ""
 	}
