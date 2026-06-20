@@ -32,3 +32,17 @@ func (c Call) Validate() error {
 
 	return nil
 }
+
+// Execution carries the validated call plus runtime-owned metadata for handlers that need it.
+type Execution struct {
+	Call        Call
+	RuntimeData map[string]any
+}
+
+func NewExecution(call Call, runtimeData map[string]any) Execution {
+	return Execution{Call: call, RuntimeData: runtimeData}
+}
+
+func (e Execution) Validate() error {
+	return e.Call.Validate()
+}
