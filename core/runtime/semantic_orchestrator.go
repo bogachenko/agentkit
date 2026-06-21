@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -71,13 +72,13 @@ func (o *SemanticOrchestrator) Run(ctx context.Context, input ClassifierInput) (
 
 	output, err := o.Classifier.Classify(ctx, input)
 	if err != nil {
-		if publishErr := o.Publisher.PublishFailure(ctx, semanticClassifierFailureMessage); publishErr != nil {
-			return SemanticRunState{}, publishErr
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return SemanticRunState{}, err
 		}
-		return SemanticRunState{Phase: SemanticPhaseFailed}, err
+		output = classifierFallbackOutput()
 	}
 	if err := output.Validate(); err != nil {
-		return SemanticRunState{}, err
+		output = classifierFallbackOutput()
 	}
 
 	decision := DecideSemanticRoute(output)
@@ -139,6 +140,10 @@ func (o *SemanticOrchestrator) Run(ctx context.Context, input ClassifierInput) (
 	default:
 		return SemanticRunState{}, fmt.Errorf("unsupported semantic route action %q", string(decision.Action))
 	}
+}
+
+func classifierFallbackOutput() ClassifierOutput {
+	return ClassifierOutput{Route: RouteExecuteTask, UserMessage: ""}
 }
 
 func applySemanticMemorySnapshot(input ClassifierInput, snapshot SemanticMemorySnapshot) ClassifierInput {
