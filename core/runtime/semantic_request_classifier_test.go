@@ -44,6 +44,50 @@ func TestSemanticRequestClassifierBuildsPromptCallsModelAndExtractsOutput(t *tes
 	}
 }
 
+func TestSemanticRequestClassifierRepairsAskUserForAvailableBrowserTask(t *testing.T) {
+	model := &fakeSemanticClassifierModel{message: llm.NewMessage(llm.RoleAssistant, llm.TextPart(`{"route":"ASK_USER","user_message":"Please provide access details."}`))}
+	classifier := SemanticRequestClassifier{Model: model}
+
+	output, err := classifier.Classify(context.Background(), ClassifierInput{
+		UserPrompt: "Открой vc.ru и напиши какие заголовки у первых 3 статей",
+		Tools: []ToolCatalogItem{{
+			Name:      "browser_open",
+			Available: true,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.Route != RouteExecuteTask {
+		t.Fatalf("route = %q", output.Route)
+	}
+	if output.UserMessage != "" {
+		t.Fatalf("user message = %q", output.UserMessage)
+	}
+}
+
+func TestSemanticRequestClassifierKeepsAskUserForPrivateBrowserTask(t *testing.T) {
+	model := &fakeSemanticClassifierModel{message: llm.NewMessage(llm.RoleAssistant, llm.TextPart(`{"route":"ASK_USER","user_message":"Please provide login credentials."}`))}
+	classifier := SemanticRequestClassifier{Model: model}
+
+	output, err := classifier.Classify(context.Background(), ClassifierInput{
+		UserPrompt: "Открой личный кабинет и проверь заказы",
+		Tools: []ToolCatalogItem{{
+			Name:      "browser_open",
+			Available: true,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.Route != RouteAskUser {
+		t.Fatalf("route = %q", output.Route)
+	}
+	if strings.TrimSpace(output.UserMessage) == "" {
+		t.Fatal("expected ask user message")
+	}
+}
+
 func TestSemanticRequestClassifierRequiresModel(t *testing.T) {
 	_, err := (SemanticRequestClassifier{}).Classify(context.Background(), ClassifierInput{UserPrompt: "status"})
 	if err == nil {

@@ -27,5 +27,9 @@ func (c SemanticRequestClassifier) Classify(ctx context.Context, input Classifie
 	if err != nil {
 		return ClassifierOutput{}, err
 	}
-	return ExtractSemanticClassifierOutput(message)
+	output, err := ExtractSemanticClassifierOutput(message)
+	if err != nil {
+		return ClassifierOutput{}, err
+	}
+	return repairClassifierOutputForAvailableTools(input, output), nil
 }
