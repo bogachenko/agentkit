@@ -86,7 +86,7 @@ func TestSemanticOrchestratorClassifierOrdinaryErrorFallsBackToExecuteTask(t *te
 func TestSemanticOrchestratorClassifierBadOutputFallsBackToExecuteTask(t *testing.T) {
 	publisher := &fakeSemanticPublisher{}
 	runner := &fakeSemanticRunner{}
-	orchestrator, err := NewSemanticOrchestrator(fakeSemanticClassifier{output: ClassifierOutput{Route: RouteAskUser}}, runner, publisher)
+	orchestrator, err := NewSemanticOrchestrator(fakeSemanticClassifier{output: ClassifierOutput{Route: "BAD_OUTPUT"}}, runner, publisher)
 	if err != nil {
 		t.Fatal(err)
 	}
