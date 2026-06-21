@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -56,7 +57,56 @@ func (r *fakeSemanticRunner) AddInternalInstruction(instruction string) {
 	}
 }
 
-func TestSemanticOrchestratorClassifierErrorPublishesFailure(t *testing.T) {
+func TestSemanticOrchestratorClassifierOrdinaryErrorFallsBackToExecuteTask(t *testing.T) {
+	publisher := &fakeSemanticPublisher{}
+	runner := &fakeSemanticRunner{}
+	orchestrator, err := NewSemanticOrchestrator(fakeSemanticClassifier{err: errors.New("invalid json")}, runner, publisher)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := orchestrator.Run(context.Background(), ClassifierInput{UserPrompt: "status"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if publisher.failure != "" {
+		t.Fatalf("failure = %q", publisher.failure)
+	}
+	if !runner.called {
+		t.Fatal("runner was not called")
+	}
+	if runner.allowFinalWithoutFreshEvidence {
+		t.Fatal("allowFinalWithoutFreshEvidence = true")
+	}
+	if state.Phase != SemanticPhaseDone {
+		t.Fatalf("phase = %q", state.Phase)
+	}
+}
+
+func TestSemanticOrchestratorClassifierBadOutputFallsBackToExecuteTask(t *testing.T) {
+	publisher := &fakeSemanticPublisher{}
+	runner := &fakeSemanticRunner{}
+	orchestrator, err := NewSemanticOrchestrator(fakeSemanticClassifier{output: ClassifierOutput{Route: RouteAskUser}}, runner, publisher)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := orchestrator.Run(context.Background(), ClassifierInput{UserPrompt: "status"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if publisher.blocked != "" || publisher.final != "" || publisher.failure != "" {
+		t.Fatalf("unexpected publisher output: %#v", publisher)
+	}
+	if !runner.called {
+		t.Fatal("runner was not called")
+	}
+	if state.Phase != SemanticPhaseDone {
+		t.Fatalf("phase = %q", state.Phase)
+	}
+}
+
+func TestSemanticOrchestratorClassifierContextCanceledPropagates(t *testing.T) {
 	publisher := &fakeSemanticPublisher{}
 	runner := &fakeSemanticRunner{}
 	orchestrator, err := NewSemanticOrchestrator(fakeSemanticClassifier{err: context.Canceled}, runner, publisher)
@@ -65,13 +115,36 @@ func TestSemanticOrchestratorClassifierErrorPublishesFailure(t *testing.T) {
 	}
 
 	state, err := orchestrator.Run(context.Background(), ClassifierInput{UserPrompt: "status"})
-	if err == nil {
-		t.Fatal("expected classifier error")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
 	}
-	if publisher.failure != semanticClassifierFailureMessage {
+	if publisher.failure != "" {
 		t.Fatalf("failure = %q", publisher.failure)
 	}
-	if state.Phase != SemanticPhaseFailed {
+	if state.Phase != "" {
+		t.Fatalf("phase = %q", state.Phase)
+	}
+	if runner.called {
+		t.Fatal("runner was called")
+	}
+}
+
+func TestSemanticOrchestratorClassifierDeadlineExceededPropagates(t *testing.T) {
+	publisher := &fakeSemanticPublisher{}
+	runner := &fakeSemanticRunner{}
+	orchestrator, err := NewSemanticOrchestrator(fakeSemanticClassifier{err: context.DeadlineExceeded}, runner, publisher)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := orchestrator.Run(context.Background(), ClassifierInput{UserPrompt: "status"})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v", err)
+	}
+	if publisher.failure != "" {
+		t.Fatalf("failure = %q", publisher.failure)
+	}
+	if state.Phase != "" {
 		t.Fatalf("phase = %q", state.Phase)
 	}
 	if runner.called {
